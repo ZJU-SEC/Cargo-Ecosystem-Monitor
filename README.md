@@ -1,8 +1,8 @@
-# Rust SCA Analysis
+# Cargo-Ecosystem-Monitor
 
-We divide it into three parts:
-- Propagation: **Package granularity**. Mainly focus on the Rust package manager. This won't analyse any codes inside the package. It only present an overview of the whole ecosystem. Our project of this part is called "Rust Ecosystem Monitor
-- Reachibility and Trigger Detection: In this case, we must statically(main form) or dynamically analyse the **codes inside crates**.
+Actually we divide it into two parts:
+- Propagation: **Package granularity**. Mainly focus on the Rust package manager. This won't analyse any codes inside the package. It only present an overview of the whole ecosystem. Our project of this part is called "Cargo Ecosystem Monitor
+- Reachibility and Trigger Detection(Pending): In this case, we must statically(main form) or dynamically analyse the **codes inside crates**.
   - Function revocation: Is specific bug crate invoked by other crates through dependency?
   - Codes clone: In some ways, we have to manually copy+paste others' codes as we want to modify them, which bypasses Cargo. This may cause delay update of related codes and they are often hard to maintain. Example: https://users.rust-lang.org/t/dependency-conflict/61807/5
   - Unsafe <-> Safe function: Can goalkeeper funtion make itself safe? It need propagation, type safety and other types of analysis.
