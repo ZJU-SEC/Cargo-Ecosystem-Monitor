@@ -54,7 +54,7 @@ We have constructed 5 steps to Analyse the data.
 
 For fast developing, we use two paths: Python and Rust. The former helps get a demo fast. The later forms a release tool.
 
-Python: We write scripts to roughly do the Version Match, and use postgreDB to access data and get dependency graph in .csv form, which is then loaded to Gephi to get final graph. We select a bug in http, which clearly caused much propagation. https://github.com/advisories/GHSA-x7vr-c387-8w57
+Python: We write scripts to roughly do the Version Match, and use postgreDB to access data and get dependency graph in .csv form, which is then loaded to Gephi to get final graph. We select a bug in http, which clearly caused much propagation. For the bug you can refer to https://github.com/advisories/GHSA-x7vr-c387-8w57.
 
 ![](pics/RustEcoMonitor_exp1.png)
 
@@ -67,7 +67,8 @@ To get complete and accurate results, we reuse components in Cargo project.
    1. `cargo::core::dependency::Dependency::parse()`: Attempt to create a Dependency from an entry in the manifest. Might help in Version Selection of a single crate. https://docs.rs/cargo/latest/cargo/core/dependency/struct.Dependency.html
    2. Dependency graph: `Struct cargo::util::graph::Graph`. I think that in `cargo::core::Resolve`, Graph stores all one-level dependency in `Graph`, and each in `Dependency`. We need pick up logic codes that generate full Resolve. https://docs.rs/cargo/latest/cargo/core/struct.Resolve.html#
    3. Detailed implementation can be found in `src/cargo/core/resolver/encode.rs`.This module contains all machinery necessary to parse a `Resolve` from a `Cargo.lock` as well as serialize a `Resolve` to a `Cargo.lock`. Doc: https://docs.rs/cargo/latest/cargo/core/resolver/index.html
-3. DB query( Or Online API): In `cargo/core/resolver/encode.rs fn into_resolve()`.
+   3. From all above files, finally I find `src/cargo/ops/resolve.rs` and `src/cargo/ops/cargo_generate_lockfile.rs` , which support `cargo generate-lockfile` cmd. From `generate_lockfile` in `src/cargo/ops/cargo_generate_lockfile.rs` we can learn how a dependency graph is generated and then modify the code to perform the functionality we want. A demo code to get dependecy graph can be find at [Demo](./Code/demo1.rs).
+3. DB query(Or Online API): In `cargo/core/resolver/encode.rs fn into_resolve()`.
 4. Related Cargo doc: `src/doc/contrib/src/architecture/files.md`. Some tips for you: Search "Cargo.lock" in vscode, you may find related information.
 
 #### Useful tools
