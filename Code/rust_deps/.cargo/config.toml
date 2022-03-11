@@ -1,0 +1,7 @@
+[source]
+
+[source.mirror]
+registry = "file:///path/to/crates.io-index"
+
+[source.crates-io]
+replace-with = "mirror"

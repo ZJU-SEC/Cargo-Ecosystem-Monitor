@@ -63,12 +63,30 @@ Python: We write scripts to roughly do the Version Match, and use postgreDB to a
 To get complete and accurate results, we reuse components in Cargo project.
 
 1. Version Parse: See project `semver` file `tests/test_version_req.rs line 35 fn test_basic()`. You can change codes as the pic below. Then `run test` and modify to find out how it works. After that, you can just import `semver` library for "Version parse". ![](pics/semver_match.png). 
+
 2. Version selection: Before Cargo builds the file, it will first generates `Cargo.lock` which contains specific version of each dependency crate. So we have to find out the logic codes of the generation.
    1. `cargo::core::dependency::Dependency::parse()`: Attempt to create a Dependency from an entry in the manifest. Might help in Version Selection of a single crate. https://docs.rs/cargo/latest/cargo/core/dependency/struct.Dependency.html
+   
    2. Dependency graph: `Struct cargo::util::graph::Graph`. I think that in `cargo::core::Resolve`, Graph stores all one-level dependency in `Graph`, and each in `Dependency`. We need pick up logic codes that generate full Resolve. https://docs.rs/cargo/latest/cargo/core/struct.Resolve.html#
+   
    3. Detailed implementation can be found in `src/cargo/core/resolver/encode.rs`.This module contains all machinery necessary to parse a `Resolve` from a `Cargo.lock` as well as serialize a `Resolve` to a `Cargo.lock`. Doc: https://docs.rs/cargo/latest/cargo/core/resolver/index.html
-   3. From all above files, finally I find `src/cargo/ops/resolve.rs` and `src/cargo/ops/cargo_generate_lockfile.rs` , which support `cargo generate-lockfile` cmd. From `generate_lockfile` in `src/cargo/ops/cargo_generate_lockfile.rs` we can learn how a dependency graph is generated and then modify the code to perform the functionality we want. A demo code to get dependecy graph can be find at [Demo](./Code/demo1.rs).
+   
+   4. From all above files, finally I find `src/cargo/ops/resolve.rs` and `src/cargo/ops/cargo_generate_lockfile.rs` , which support `cargo generate-lockfile` cmd. From `generate_lockfile` in `src/cargo/ops/cargo_generate_lockfile.rs` we can learn how a dependency graph is generated and then modify the code to perform the functionality we want. A demo code to get dependecy graph can be find at [Demo](./Code/demo1.rs).
+   
+   5. In order to accelerate the indexing process, we use a local registry instead. For details please refer to https://github.com/rust-lang/cargo/issues/9471. When running we still can see `updating index`, but according to `update_index` method in `src/cargo/registry/mod.rs`, it says:
+   
+      ```rust
+      /// Updates the index.
+      ///
+      /// For a remote registry, this updates the index over the network. Local
+      /// registries only check that the index exists.
+      fn update_index(&mut self) -> CargoResult<()>;
+      ```
+   
+      Detail codes please go to [rust_deps](./Code/rust_deps).
+   
 3. DB query(Or Online API): In `cargo/core/resolver/encode.rs fn into_resolve()`.
+
 4. Related Cargo doc: `src/doc/contrib/src/architecture/files.md`. Some tips for you: Search "Cargo.lock" in vscode, you may find related information.
 
 #### Useful tools
