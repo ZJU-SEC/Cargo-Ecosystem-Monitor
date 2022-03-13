@@ -1,23 +1,26 @@
-use postgres::{Client, NoTls};
+extern crate simplelog;
+extern crate anyhow;
+
+use simplelog::*;
+use std::fs::File;
 use util::*;
 
 mod util;
 
 fn main() {
-    let mut conn = Client::connect(
-        "host=localhost dbname=crates user=postgres password=postgres",
-        NoTls,
-    )
+    CombinedLogger::init(vec![
+        TermLogger::new(
+            LevelFilter::Info,
+            Config::default(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        ),
+        WriteLogger::new(
+            LevelFilter::Info,
+            Config::default(),
+            File::create("./rust_deps.log").unwrap(),
+        ),
+    ])
     .unwrap();
-    conn.query(
-        r#"CREATE TABLE dep_version(
-                        version_from INT,
-                        version_to INT,
-                        dep_level INT,
-                        UNIQUE(version_from, version_to, dep_level))"#,
-        &[],
-    )
-    .unwrap_or_default();
-
-    resolve_store_deps_of_version(&mut conn, 505768);
+    run_deps(6)
 }

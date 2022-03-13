@@ -4,74 +4,66 @@ use cargo::core::Workspace;
 use cargo::ops;
 use cargo::util::Config;
 
-use postgres::Client;
+use anyhow::{Context, Result};
+use log::{info, warn};
+use postgres::{Client, NoTls};
 use std::collections::VecDeque;
 use std::env::current_dir;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 /// Get a name by crate id.
 ///
 /// # Example
 /// ```
-/// let name = get_name_by_crate_id(conn, 321);
+/// let name = get_name_by_crate_id(conn, 321)?;
 /// assert_eq!(&name, "ecs")
 /// ```
-///
-/// # Panic
-/// If the crate **DONOT** exist, function will panics.
-fn get_name_by_crate_id(conn: &mut Client, crate_id: i32) -> String {
+fn get_name_by_crate_id(conn: Arc<Mutex<Client>>, crate_id: i32) -> Result<String> {
     let query = format!("SELECT name FROM crates WHERE id = {} LIMIT 1", crate_id);
-    let row = conn.query(&query, &[]).unwrap();
-    row.first()
-        .expect(&format!(
-            "Get name by crate id fails, crate id: {}",
-            crate_id
-        ))
-        .get(0)
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
+    Ok(row
+        .first()
+        .with_context(|| format!("Get name by crate id fails, crate id: {}", crate_id))?
+        .get(0))
 }
 
 /// Get a name by version id.
 ///
 /// # Example
 /// ```
-/// let name = get_name_by_version_id(conn, 6034);
+/// let name = get_name_by_version_id(conn, 6034)?;
 /// assert_eq!(&name, "ecs")
 /// ```
-///
-/// # Panic
-/// If the crate **DONOT** exist, function will panics.
-fn get_name_by_version_id(conn: &mut Client, version_id: i32) -> String {
+fn get_name_by_version_id(conn: Arc<Mutex<Client>>, version_id: i32) -> Result<String> {
     let query = format!(
         "SELECT crate_id FROM versions WHERE id = {} LIMIT 1",
         version_id
     );
-    let row = conn.query(&query, &[]).unwrap();
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
     let crate_id = row
         .first()
-        .expect(&format!(
-            "Get name by version id fails, version id: {}",
-            version_id
-        ))
+        .with_context(|| format!("Get name by version id fails, version id: {}", version_id))?
         .get(0);
     get_name_by_crate_id(conn, crate_id)
 }
 
-
-fn get_version_str_by_version_id(conn: &mut Client, version_id: i32) -> String {
-    let query = format!(
-        "SELECT num FROM versions WHERE id = {} LIMIT 1",
-        version_id
-    );
-    let row = conn.query(&query, &[]).unwrap();
-    row.first().expect(&format!(
-        "Get version string by version id fails, version id: {}",
-        version_id
-    ))
-    .get(0)
+fn get_version_str_by_version_id(conn: Arc<Mutex<Client>>, version_id: i32) -> Result<String> {
+    let query = format!("SELECT num FROM versions WHERE id = {} LIMIT 1", version_id);
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
+    Ok(row
+        .first()
+        .with_context(|| {
+            format!(
+                "Get version string by version id fails, version id: {}",
+                version_id
+            )
+        })?
+        .get(0))
 }
-
 
 /// Get crate id by name.
 ///
@@ -80,12 +72,13 @@ fn get_version_str_by_version_id(conn: &mut Client, version_id: i32) -> String {
 /// let crate_id = get_crate_id_by_name(conn, http);
 /// assert_eq!(crate_id, 184);
 /// ```
-fn get_crate_id_by_name(conn: &mut Client, name: &str) -> i32 {
+fn get_crate_id_by_name(conn: Arc<Mutex<Client>>, name: &str) -> Result<i32> {
     let query = format!("SELECT id FROM crates WHERE name = '{}' LIMIT 1", name);
-    let row = conn.query(&query, &[]).unwrap();
-    row.first()
-        .expect(&format!("Get crate id by name fails, name: {}", name))
-        .get(0)
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
+    Ok(row
+        .first()
+        .with_context(|| format!("Get crate id by name fails, name: {}", name))?
+        .get(0))
 }
 
 /// Get version by name and version string
@@ -95,25 +88,32 @@ fn get_crate_id_by_name(conn: &mut Client, name: &str) -> i32 {
 /// let version_id = get_version_by_name_version(conn, "http", "0.2.4");
 /// assert_eq!(version_id, 362968);
 /// ```
-fn get_version_by_name_version(conn: &mut Client, name: &str, version: &str) -> i32 {
+fn get_version_by_name_version(conn: Arc<Mutex<Client>>, name: &str, version: &str) -> Result<i32> {
     let query = format! {
         "SELECT id FROM versions WHERE num = '{}' AND crate_id = '{}' LIMIT 1",
         version,
-        get_crate_id_by_name(conn, name)
+        get_crate_id_by_name(Arc::clone(&conn), name)?
     };
-    let row = conn.query(&query, &[]).unwrap();
-    row.first()
-        .expect(&format!(
-            "Get version id by name & version fails, name:{} version: {}",
-            name, version
-        ))
-        .get(0)
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
+    Ok(row
+        .first()
+        .with_context(|| {
+            format!(
+                "Get version id by name & version fails, name:{} version: {}",
+                name, version
+            )
+        })?
+        .get(0))
 }
 
 /// Resolve version's dependencies and store them into db.
-pub fn resolve_store_deps_of_version(conn: &mut Client, version_id: i32) {
-    let name = get_name_by_version_id(conn, version_id);
-    let num = get_version_str_by_version_id(conn, version_id);
+fn resolve_store_deps_of_version(
+    conn: Arc<Mutex<Client>>,
+    version_id: i32,
+    dep_filename: &str,
+) -> Result<()> {
+    let name = get_name_by_version_id(Arc::clone(&conn), version_id)?;
+    let num = get_version_str_by_version_id(Arc::clone(&conn), version_id)?;
 
     let mut file = String::from(
         r#"[package]
@@ -129,7 +129,8 @@ edition = "2021"
     let current_path = current_dir().unwrap();
     let mut current_toml_path = String::new();
     current_toml_path.push_str(current_path.to_str().unwrap());
-    current_toml_path.push_str("/dep.toml");
+    current_toml_path.push_str("/");
+    current_toml_path.push_str(dep_filename);
 
     File::create(&current_toml_path)
         .unwrap()
@@ -149,10 +150,9 @@ edition = "2021"
         None,
         &[],
         true,
-    )
-    .unwrap();
+    )?;
 
-    let root = resolve.query(&name).expect("Get root error!");
+    let root = resolve.query(&name)?;
     let mut v = VecDeque::new();
     let mut level = 1;
     v.extend([Some(root), None]);
@@ -164,13 +164,13 @@ edition = "2021"
                     "INSERT INTO dep_version VALUES({}, {}, {})",
                     version_id,
                     get_version_by_name_version(
-                        conn,
+                        Arc::clone(&conn),
                         &pkg.name().to_string(),
                         &pkg.version().to_string(),
-                    ),
+                    )?,
                     level
                 );
-                conn.query(&query, &[]).unwrap_or_default();
+                conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
                 v.push_back(Some(pkg));
             }
         } else {
@@ -180,23 +180,73 @@ edition = "2021"
             }
         }
     }
+    Ok(())
 }
 
+fn run_one_pass(conn: Arc<Mutex<Client>>, versions: Arc<Vec<i32>>, jobs: usize) {
+    let mut handles = vec![];
 
+    for i in 0..jobs {
+        let conn = Arc::clone(&conn);
+        let version = Arc::clone(&versions);
+        let filename = format!("dep{}.toml", i);
 
-/// Get dependency versions by version id
-pub fn get_deps_of_version(conn: &mut Client, version_id: i32) -> Vec<(i32, i32)> {
-    let query = format!(
-        "SELECT version_to,dep_level FROM dep_version WHERE version_from = '{}'",
-        version_id
-    );
-    let mut res = conn.query(&query, &[]).unwrap();
-
-    // If not resolved yet.
-    if res.is_empty() {
-        resolve_store_deps_of_version(conn, version_id);
-        res = conn.query(&query, &[]).unwrap();
+        handles.push(thread::spawn(move || {
+            let mut index = i as usize;
+            while index < version.len() {
+                let v = version[index];
+                if let Err(e) = resolve_store_deps_of_version(Arc::clone(&conn), v, &filename) {
+                    warn!("{}", e);
+                } else {
+                    info!("Done version - {}", v);
+                }
+                index += jobs;
+            }
+        }));
     }
 
-    res.iter().map(|r| (r.get(0), r.get(1))).collect()
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+pub fn run_deps(jobs: usize) {
+    let conn = Arc::new(Mutex::new(
+        Client::connect(
+            "host=localhost dbname=crates user=postgres password=postgres",
+            NoTls,
+        )
+        .unwrap(),
+    ));
+    conn.lock()
+        .unwrap()
+        .query(
+            r#"CREATE TABLE dep_version(
+                        version_from INT,
+                        version_to INT,
+                        dep_level INT,
+                        UNIQUE(version_from, version_to, dep_level))"#,
+            &[],
+        )
+        .unwrap_or_default();
+
+    // Get versions
+    let mut offset = 0u32;
+    loop {
+        let conn = Arc::clone(&conn);
+        let query = format!(
+            "SELECT id FROM versions ORDER BY crate_id asc LIMIT 1000 OFFSET {}",
+            offset
+        );
+        let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
+        if rows.is_empty() {
+            break;
+        } else {
+            let v: Vec<i32> = rows.iter().map(|version| version.get(0)).collect();
+            run_one_pass(conn, Arc::new(v), jobs);
+        }
+        offset += 1000;
+    }
+
+    println!("Resolving Done!");
 }
