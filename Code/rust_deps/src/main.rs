@@ -19,5 +19,5 @@ fn main() {
     )
     .unwrap_or_default();
 
-    resolve_store_deps_of_version(&mut conn, 321);
+    resolve_store_deps_of_version(&mut conn, 505768);
 }

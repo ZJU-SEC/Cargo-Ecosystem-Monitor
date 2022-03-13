@@ -58,6 +58,21 @@ fn get_name_by_version_id(conn: &mut Client, version_id: i32) -> String {
     get_name_by_crate_id(conn, crate_id)
 }
 
+
+fn get_version_str_by_version_id(conn: &mut Client, version_id: i32) -> String {
+    let query = format!(
+        "SELECT num FROM versions WHERE id = {} LIMIT 1",
+        version_id
+    );
+    let row = conn.query(&query, &[]).unwrap();
+    row.first().expect(&format!(
+        "Get version string by version id fails, version id: {}",
+        version_id
+    ))
+    .get(0)
+}
+
+
 /// Get crate id by name.
 ///
 /// # Example
@@ -95,29 +110,10 @@ fn get_version_by_name_version(conn: &mut Client, name: &str, version: &str) -> 
         .get(0)
 }
 
-/// Get dependency versions by version id
-pub fn get_deps_of_version(conn: &mut Client, version_id: i32) -> Vec<(i32, i32)> {
-    let query = format!(
-        "SELECT version_to,dep_level FROM dep_version WHERE version_from = '{}'",
-        version_id
-    );
-    let mut res = conn.query(&query, &[]).unwrap();
-
-    // If not resolved yet.
-    if res.is_empty() {
-        resolve_store_deps_of_version(conn, version_id);
-        res = conn.query(&query, &[]).unwrap();
-    }
-
-    res.iter().map(|r| (r.get(0), r.get(1))).collect()
-}
-
 /// Resolve version's dependencies and store them into db.
 pub fn resolve_store_deps_of_version(conn: &mut Client, version_id: i32) {
-    let query = format!(
-        "SELECT distinct crate_id,req FROM dependencies WHERE version_id = '{}'",
-        version_id
-    );
+    let name = get_name_by_version_id(conn, version_id);
+    let num = get_version_str_by_version_id(conn, version_id);
 
     let mut file = String::from(
         r#"[package]
@@ -128,11 +124,7 @@ edition = "2021"
 [dependencies]"#,
     );
 
-    for row in conn.query(&query, &[]).unwrap() {
-        let name = get_name_by_crate_id(conn, row.get(0));
-        let req: String = row.get(1);
-        file.push_str(&format!("\n{} = \"{}\"", name, req));
-    }
+    file.push_str(&format!("\n{} = \"={}\"", name, num));
 
     let current_path = current_dir().unwrap();
     let mut current_toml_path = String::new();
@@ -160,7 +152,7 @@ edition = "2021"
     )
     .unwrap();
 
-    let root = resolve.query("dep").expect("Get root error!");
+    let root = resolve.query(&name).expect("Get root error!");
     let mut v = VecDeque::new();
     let mut level = 1;
     v.extend([Some(root), None]);
@@ -188,4 +180,23 @@ edition = "2021"
             }
         }
     }
+}
+
+
+
+/// Get dependency versions by version id
+pub fn get_deps_of_version(conn: &mut Client, version_id: i32) -> Vec<(i32, i32)> {
+    let query = format!(
+        "SELECT version_to,dep_level FROM dep_version WHERE version_from = '{}'",
+        version_id
+    );
+    let mut res = conn.query(&query, &[]).unwrap();
+
+    // If not resolved yet.
+    if res.is_empty() {
+        resolve_store_deps_of_version(conn, version_id);
+        res = conn.query(&query, &[]).unwrap();
+    }
+
+    res.iter().map(|r| (r.get(0), r.get(1))).collect()
 }
