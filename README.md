@@ -84,6 +84,10 @@ To get complete and accurate results, we reuse components in Cargo project.
       ```
    
       Detail codes please go to [rust_deps](./Code/rust_deps).
+      
+   6. However, when using multi-thread to accelerate the resolving process, we find out that there is a **package cache lock** (see `cargo/src/ops/resolve.rs - resolve_with_previous`), which forces to run resolving in sequence (that’s bad). Since we are using a local index, and we guess no writability is needed to done the dependency resolving, we try to remove the lock. A trace route is `cargo/src/ops/resolve.rs - resolve_with_previous ` -> `cargo/src/cargo/core/resolver/mod.rs - resolve` -> `cargo/src/cargo/core/resolver/mod.rs - activate_deps_loop` -> `cargo/src/cargo/core/resolver/mod.rs - activate` -> `cargo/src/cargo/core/resolver/dep_cache.rs - build_deps` -> `cargo/src/cargo/core/resolver/dep_cache.rs - query` -> `cargo/src/cargo/core/registry.rs - query` -> `cargo/src/cargo/core/registry.rs - ensure_loaded` -> `cargo/src/cargo/core/registry.rs - load` -> …… It’s a little bit hard I think, thus I’m considering some other ways to remove the lock.
+   
+   7. Notice the annotation in `cargo/src/cargo/util/config/mod.rs - acquire_package_cache_lock`, we find out the lock can be read only, which means it can be shared. So I change `~/.cargo/.package-cache` to readonly. It seems to work at first, but crashed due to reason I don’t quite understand. Then I start to think: can each thread use it’s own cache? It turns out working. But what’s strange is that it runs even slower, and appears relevance with number of jobs.
    
 3. DB query(Or Online API): In `cargo/core/resolver/encode.rs fn into_resolve()`.
 

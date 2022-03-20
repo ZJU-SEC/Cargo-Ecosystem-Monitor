@@ -4,16 +4,20 @@ use cargo::core::Workspace;
 use cargo::ops;
 use cargo::util::Config;
 
-use anyhow::{Context, Result};
-use log::{info, warn};
-use postgres::{Client, NoTls};
 use std::collections::VecDeque;
 use std::env::current_dir;
 use std::fs::File;
 use std::io::Write;
+use std::panic::catch_unwind;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+use anyhow::{Context, Result};
+use crossbeam::channel;
+use log::{error, info, warn};
+use postgres::{Client, NoTls};
+
 
 /// Get a name by crate id.
 ///
@@ -137,11 +141,11 @@ edition = "2021"
         .write_all(file.as_bytes())
         .expect("Write failed");
 
-    let config = Config::default().unwrap();
-    let ws = Workspace::new(&Path::new(&current_toml_path), &config).unwrap();
+    let config = Config::default()?;
+    let ws = Workspace::new(&Path::new(&current_toml_path), &config)?;
 
-    let mut registry = PackageRegistry::new(ws.config()).unwrap();
-    let mut resolve = ops::resolve_with_previous(
+    let mut registry = PackageRegistry::new(ws.config())?;
+    let resolve = ops::resolve_with_previous(
         &mut registry,
         &ws,
         &CliFeatures::new_all(true),
@@ -152,6 +156,8 @@ edition = "2021"
         true,
     )?;
 
+    // println!("{:#?}", resolve);
+
     let root = resolve.query(&name)?;
     let mut v = VecDeque::new();
     let mut level = 1;
@@ -161,7 +167,7 @@ edition = "2021"
         if let Some(pkg) = next {
             for (pkg, _) in resolve.deps(pkg) {
                 let query = format!(
-                    "INSERT INTO dep_version VALUES({}, {}, {})",
+                    "INSERT INTO dep_version VALUES({}, {}, {});",
                     version_id,
                     get_version_by_name_version(
                         Arc::clone(&conn),
@@ -183,34 +189,7 @@ edition = "2021"
     Ok(())
 }
 
-fn run_one_pass(conn: Arc<Mutex<Client>>, versions: Arc<Vec<i32>>, jobs: usize) {
-    let mut handles = vec![];
-
-    for i in 0..jobs {
-        let conn = Arc::clone(&conn);
-        let version = Arc::clone(&versions);
-        let filename = format!("dep{}.toml", i);
-
-        handles.push(thread::spawn(move || {
-            let mut index = i as usize;
-            while index < version.len() {
-                let v = version[index];
-                if let Err(e) = resolve_store_deps_of_version(Arc::clone(&conn), v, &filename) {
-                    warn!("{}", e);
-                } else {
-                    info!("Done version - {}", v);
-                }
-                index += jobs;
-            }
-        }));
-    }
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-}
-
-pub fn run_deps(jobs: usize) {
+pub fn run_deps(workers: usize) {
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -230,22 +209,91 @@ pub fn run_deps(jobs: usize) {
         )
         .unwrap_or_default();
 
+    // Decide start point
+    let mut offset = 0i64;
+    let res = conn
+        .lock()
+        .unwrap()
+        .query(
+            "SELECT version_from FROM dep_version ORDER BY version_from desc LIMIT 1",
+            &[],
+        )
+        .unwrap();
+
+    if let Some(last) = res.first() {
+        let last: i32 = last.get(0);
+        let query = format!(
+            "SELECT row_number FROM (
+            SELECT ROW_NUMBER() OVER (ORDER BY crate_id ASC),id FROM versions) as temp
+            WHERE id = '{}'",
+            last
+        );
+
+        offset = conn
+            .lock()
+            .unwrap()
+            .query(&query, &[])
+            .unwrap()
+            .first()
+            .unwrap()
+            .get(0);
+    }
+
+    info!("Starting offset: {}", offset);
+
+    // Create channel
+    let (tx, rx) = channel::bounded(workers);
+
+    // Create threads
+    let mut handles = vec![];
+    for i in 0..workers {
+        let conn = Arc::clone(&conn);
+        let rx = rx.clone();
+
+        handles.push(thread::spawn(move || {
+            let filename = format!("dep{}.toml", i);
+            while let Ok(versions) = rx.recv() {
+                for v in versions {
+                    if catch_unwind(|| {
+                        if let Err(e) =
+                            resolve_store_deps_of_version(Arc::clone(&conn), v, &filename)
+                        {
+                            warn!("{}", e);
+                        } else {
+                            info!("Done version - {}", v);
+                        }
+                    })
+                    .is_err()
+                    {
+                        error!("Panic occurs, version - {}", v);
+                    }
+                }
+            }
+        }));
+    }
+
     // Get versions
-    let mut offset = 0u32;
     loop {
         let conn = Arc::clone(&conn);
         let query = format!(
-            "SELECT id FROM versions ORDER BY crate_id asc LIMIT 1000 OFFSET {}",
+            "SELECT id FROM versions ORDER BY crate_id asc LIMIT 250 OFFSET {}",
             offset
         );
         let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
+
         if rows.is_empty() {
             break;
         } else {
             let v: Vec<i32> = rows.iter().map(|version| version.get(0)).collect();
-            run_one_pass(conn, Arc::new(v), jobs);
+            tx.send(v).expect("Send task error!");
         }
-        offset += 1000;
+        offset += 250;
+    }
+
+    std::mem::drop(tx);
+
+    for handle in handles {
+        handle.join();
     }
 
     println!("Resolving Done!");
