@@ -1,7 +1,10 @@
 [source]
 
 [source.mirror]
-registry = "file:///path/to/crates.io-index"
+registry = "file:///home/loancold/Projects/Cargo-Ecosystem-Monitor/crates.io-index"
 
 [source.crates-io]
 replace-with = "mirror"
+
+[net]
+git-fetch-with-cli = true

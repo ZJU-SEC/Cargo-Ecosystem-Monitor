@@ -8,3 +8,6 @@ edition = "2021"
 [dependencies]
 cargo = "0.60.0"
 postgres = "0.19.2"
+simplelog = "0.11.2"
+anyhow = "1.0.56"
+log = "0.4.14"

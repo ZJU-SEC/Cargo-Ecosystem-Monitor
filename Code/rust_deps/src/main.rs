@@ -22,5 +22,5 @@ fn main() {
         ),
     ])
     .unwrap();
-    run_deps(6)
+    run_deps(20)
 }

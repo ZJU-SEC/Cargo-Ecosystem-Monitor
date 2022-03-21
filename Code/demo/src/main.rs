@@ -40,7 +40,7 @@ fn main() {
     let time_consume = time_after.duration_since(time_before);
 
     // `resolve` is the full dependency in toml file.
-    println!("{:#?}", resolve);
+    // println!("{:#?}", resolve);
     println!("{:#?}", resolve.query("semver"));// Get specific crate version in the dependency
     println!("Parse time consumption: {:?}", time_consume.unwrap())
 }

@@ -195,18 +195,21 @@ fn run_one_pass(conn: Arc<Mutex<Client>>, versions: Arc<Vec<i32>>, jobs: usize) 
             let mut index = i as usize;
             while index < version.len() {
                 let v = version[index];
+            	info!("Job {}: Start version - {}", i, v);
                 if let Err(e) = resolve_store_deps_of_version(Arc::clone(&conn), v, &filename) {
                     warn!("{}", e);
-                } else {
-                    info!("Done version - {}", v);
                 }
                 index += jobs;
             }
+            info!("Job {} finished", i);
         }));
     }
 
     for handle in handles {
-        handle.join().unwrap();
+    	// UNSAFE:
+    	// Thread my die, we temporily allow this situation
+    	// Which loses data
+        handle.join();
     }
 }
 
@@ -231,7 +234,7 @@ pub fn run_deps(jobs: usize) {
         .unwrap_or_default();
 
     // Get versions
-    let mut offset = 0u32;
+    let mut offset = 206500u32;//84472;offset168000,176000;191000;203752
     loop {
         let conn = Arc::clone(&conn);
         let query = format!(
@@ -246,6 +249,7 @@ pub fn run_deps(jobs: usize) {
             run_one_pass(conn, Arc::new(v), jobs);
         }
         offset += 1000;
+    	warn!("OFFSET = {}", offset);
     }
 
     println!("Resolving Done!");
