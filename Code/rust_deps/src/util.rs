@@ -115,6 +115,7 @@ fn resolve_store_deps_of_version(
     conn: Arc<Mutex<Client>>,
     version_id: i32,
     dep_filename: &str,
+    job: usize
 ) -> Result<()> {
     let name = get_name_by_version_id(Arc::clone(&conn), version_id)?;
     let num = get_version_str_by_version_id(Arc::clone(&conn), version_id)?;
@@ -210,7 +211,7 @@ pub fn run_deps(workers: usize) {
         .unwrap_or_default();
 
     // Decide start point
-    let mut offset = 206500u32;//84472;offset168000,176000;191000
+    let mut offset = 241872i64;//84472;offset168000,176000;191000;241872
     let res = conn
         .lock()
         .unwrap()
@@ -219,14 +220,15 @@ pub fn run_deps(workers: usize) {
             &[],
         )
         .unwrap();
-
+        
+    // Now, we enable the "Resume from previous"
     if let Some(last) = res.first() {
         let last: i32 = last.get(0);
         let query = format!(
-            "SELECT row_number FROM (
-            SELECT ROW_NUMBER() OVER (ORDER BY crate_id ASC),id FROM versions) as temp
-            WHERE id = '{}'",
-            last
+            "with max_crate as (SELECT MAX(crate_id) 
+            FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id) 
+            SELECT COUNT(versions) FROM versions 
+            WHERE versions.crate_id<ANY(SELECT max FROM max_crate)"
         );
 
         offset = conn
@@ -256,16 +258,16 @@ pub fn run_deps(workers: usize) {
                 for v in versions {
                     if catch_unwind(|| {
                         if let Err(e) =
-                            resolve_store_deps_of_version(Arc::clone(&conn), v, &filename)
+                            resolve_store_deps_of_version(Arc::clone(&conn), v, &filename, i)
                         {
                             warn!("{}", e);
                         } else {
-                            info!("Done version - {}", v);
+                            info!("Thread {}: Done version - {}", i, v);
                         }
                     })
                     .is_err()
                     {
-                        error!("Panic occurs, version - {}", v);
+                        error!("Thread {}: Panic occurs, version - {}", i, v);
                     }
                 }
             }

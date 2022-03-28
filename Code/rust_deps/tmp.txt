@@ -1,0 +1,160 @@
+07:08:02 [0m[34m[INFO] [0mStarting offset: 206500
+07:08:02 [0m[33m[WARN] [0mOFFSET = 206750
+07:08:02 [0m[33m[WARN] [0mOFFSET = 207000
+07:08:02 [0m[33m[WARN] [0mOFFSET = 207250
+07:08:02 [0m[33m[WARN] [0mOFFSET = 207500
+07:08:03 [0m[34m[INFO] [0mDone version - 141775
+07:08:03 [0m[33m[WARN] [0mOFFSET = 207750
+07:08:03 [0m[33m[WARN] [0mOFFSET = 208000
+07:08:03 [0m[33m[WARN] [0mOFFSET = 208250
+07:08:03 [0m[33m[WARN] [0mfailed to select a version for the requirement `misdreavus-test = "=0.2.0"`
+candidate versions found which didn't match: 0.7.2, 0.7.1, 0.7.0, ...
+location searched: `mirror` index (which is replacing registry `crates-io`)
+required by package `dep v0.1.0 (/home/loancold/Projects/Cargo-Ecosystem-Monitor/Code/rust_deps)`
+perhaps a crate was updated and forgotten to be re-vendored?
+07:08:03 [0m[33m[WARN] [0mOFFSET = 208500
+07:08:03 [0m[33m[WARN] [0mfailed to select a version for the requirement `misdreavus-test = "=0.3.0"`
+candidate versions found which didn't match: 0.7.2, 0.7.1, 0.7.0, ...
+location searched: `mirror` index (which is replacing registry `crates-io`)
+required by package `dep v0.1.0 (/home/loancold/Projects/Cargo-Ecosystem-Monitor/Code/rust_deps)`
+perhaps a crate was updated and forgotten to be re-vendored?
+07:08:03 [0m[33m[WARN] [0mOFFSET = 208750
+07:08:03 [0m[33m[WARN] [0mOFFSET = 209000
+07:08:03 [0m[34m[INFO] [0mDone version - 147968
+07:08:03 [0m[33m[WARN] [0mOFFSET = 209250
+07:08:03 [0m[34m[INFO] [0mDone version - 147975
+07:08:03 [0m[33m[WARN] [0mOFFSET = 209500
+07:08:03 [0m[33m[WARN] [0mOFFSET = 209750
+07:08:03 [0m[33m[WARN] [0mOFFSET = 210000
+07:08:03 [0m[34m[INFO] [0mDone version - 148266
+07:08:03 [0m[33m[WARN] [0mOFFSET = 210250
+07:08:03 [0m[33m[WARN] [0mOFFSET = 210500
+07:08:03 [0m[34m[INFO] [0mDone version - 148267
+07:08:03 [0m[33m[WARN] [0mOFFSET = 210750
+07:08:03 [0m[34m[INFO] [0mDone version - 148268
+07:08:03 [0m[33m[WARN] [0mOFFSET = 211000
+07:08:04 [0m[33m[WARN] [0mOFFSET = 211250
+07:08:04 [0m[33m[WARN] [0mOFFSET = 211500
+07:08:04 [0m[34m[INFO] [0mDone version - 150841
+07:08:04 [0m[33m[WARN] [0mOFFSET = 211750
+07:08:04 [0m[33m[WARN] [0mOFFSET = 212000
+07:08:04 [0m[33m[WARN] [0mOFFSET = 212250
+07:08:04 [0m[34m[INFO] [0mDone version - 158380
+07:08:04 [0m[33m[WARN] [0mOFFSET = 212500
+07:08:04 [0m[33m[WARN] [0mOFFSET = 212750
+07:08:04 [0m[33m[WARN] [0mOFFSET = 213000
+07:08:04 [0m[33m[WARN] [0mOFFSET = 213250
+07:08:04 [0m[33m[WARN] [0mOFFSET = 213500
+07:08:04 [0m[34m[INFO] [0mDone version - 184345
+07:08:04 [0m[33m[WARN] [0mOFFSET = 213750
+07:08:04 [0m[33m[WARN] [0mOFFSET = 214000
+07:08:04 [0m[34m[INFO] [0mfailed to parse "fu/tu/futures-util-preview" registry package: feature `compat` includes `futures01` which is neither a dependency nor another feature
+07:08:04 [0m[34m[INFO] [0mfailed to parse "fu/tu/futures-util-preview" registry package: feature `compat` includes `futures01` which is neither a dependency nor another feature
+07:08:04 [0m[33m[WARN] [0mOFFSET = 214250
+07:08:04 [0m[33m[WARN] [0mOFFSET = 214500
+07:08:05 [0m[33m[WARN] [0mOFFSET = 214750
+07:08:05 [0m[33m[WARN] [0mOFFSET = 215000
+07:08:05 [0m[33m[WARN] [0mOFFSET = 215250
+07:08:05 [0m[34m[INFO] [0mfailed to parse "fu/tu/futures-util-preview" registry package: feature `compat` includes `futures01` which is neither a dependency nor another feature
+07:08:05 [0m[33m[WARN] [0mOFFSET = 215500
+07:08:05 [0m[33m[WARN] [0mOFFSET = 215750
+07:08:05 [0m[33m[WARN] [0mOFFSET = 216000
+07:08:05 [0m[33m[WARN] [0mOFFSET = 216250
+07:08:05 [0m[33m[WARN] [0mOFFSET = 216500
+07:08:05 [0m[34m[INFO] [0mDone version - 173392
+07:08:06 [0m[34m[INFO] [0mDone version - 280801
+07:08:06 [0m[34m[INFO] [0mDone version - 143849
+07:08:06 [0m[34m[INFO] [0mDone version - 263998
+07:08:06 [0m[33m[WARN] [0mfailed to select a version for the requirement `pbkdf2 = "^0.2"`
+candidate versions found which didn't match: 0.10.1, 0.10.0, 0.9.0, ...
+location searched: `mirror` index (which is replacing registry `crates-io`)
+required by package `grin_keychain v5.0.1`
+    ... which satisfies dependency `grin_keychain = "^5.0.1"` of package `grin_wallet_util v5.0.1`
+    ... which satisfies dependency `grin_wallet_util = "^5.0.1"` of package `grin_wallet_config v5.0.1`
+    ... which satisfies dependency `grin_wallet_config = "=5.0.1"` of package `dep v0.1.0 (/home/loancold/Projects/Cargo-Ecosystem-Monitor/Code/rust_deps)`
+perhaps a crate was updated and forgotten to be re-vendored?
+07:08:06 [0m[34m[INFO] [0mDone version - 203208
+07:08:06 [0m[34m[INFO] [0mDone version - 141367
+07:08:06 [0m[34m[INFO] [0mDone version - 141188
+07:08:06 [0m[34m[INFO] [0mDone version - 436290
+07:08:06 [0m[34m[INFO] [0mDone version - 285956
+07:08:06 [0m[34m[INFO] [0mDone version - 394451
+07:08:06 [0m[34m[INFO] [0mDone version - 301054
+07:08:06 [0m[34m[INFO] [0mDone version - 204032
+07:08:06 [0m[34m[INFO] [0mDone version - 141731
+07:08:06 [0m[34m[INFO] [0mDone version - 141780
+07:08:06 [0m[34m[INFO] [0mDone version - 265489
+07:08:07 [0m[34m[INFO] [0mDone version - 141743
+07:08:07 [0m[34m[INFO] [0mDone version - 168143
+07:08:07 [0m[34m[INFO] [0mDone version - 353732
+07:08:07 [0m[34m[INFO] [0mfailed to parse "fu/tu/futures-util-preview" registry package: feature `compat` includes `futures01` which is neither a dependency nor another feature
+07:08:07 [0m[34m[INFO] [0mDone version - 217669
+07:08:07 [0m[34m[INFO] [0mDone version - 144234
+07:08:07 [0m[34m[INFO] [0mDone version - 141745
+07:08:07 [0m[34m[INFO] [0mDone version - 277509
+07:08:07 [0m[34m[INFO] [0mDone version - 149045
+07:08:07 [0m[34m[INFO] [0mDone version - 333100
+07:08:07 [0m[34m[INFO] [0mDone version - 142161
+07:08:07 [0m[34m[INFO] [0mDone version - 447130
+07:08:07 [0m[34m[INFO] [0mDone version - 142164
+07:08:08 [0m[34m[INFO] [0mDone version - 410002
+07:08:08 [0m[34m[INFO] [0mDone version - 326043
+07:08:08 [0m[34m[INFO] [0mDone version - 417326
+07:08:08 [0m[33m[WARN] [0mfailed to select a version for the requirement `i3_ipc = "=0.13.0"`
+candidate versions found which didn't match: 0.14.0, 0.12.0, 0.11.0, ...
+location searched: `mirror` index (which is replacing registry `crates-io`)
+required by package `dep v0.1.0 (/home/loancold/Projects/Cargo-Ecosystem-Monitor/Code/rust_deps)`
+perhaps a crate was updated and forgotten to be re-vendored?
+07:08:08 [0m[34m[INFO] [0mDone version - 171367
+07:08:08 [0m[34m[INFO] [0mDone version - 145061
+07:08:08 [0m[34m[INFO] [0mDone version - 277712
+07:08:08 [0m[34m[INFO] [0mDone version - 141782
+07:08:08 [0m[34m[INFO] [0mDone version - 145909
+07:08:08 [0m[34m[INFO] [0mDone version - 183236
+07:08:08 [0m[34m[INFO] [0mDone version - 171920
+07:08:08 [0m[34m[INFO] [0mDone version - 183238
+07:08:08 [0m[34m[INFO] [0mDone version - 172852
+07:08:08 [0m[34m[INFO] [0mfailed to parse "fu/tu/futures-util-preview" registry package: feature `compat` includes `futures01` which is neither a dependency nor another feature
+07:08:08 [0m[34m[INFO] [0mDone version - 288239
+07:08:09 [0m[34m[INFO] [0mDone version - 515392
+07:08:09 [0m[34m[INFO] [0mDone version - 145192
+07:08:09 [0m[34m[INFO] [0mDone version - 253543
+07:08:09 [0m[34m[INFO] [0mDone version - 172039
+07:08:09 [0m[34m[INFO] [0mDone version - 141189
+07:08:09 [0m[34m[INFO] [0mDone version - 153929
+07:08:09 [0m[34m[INFO] [0mDone version - 449133
+07:08:09 [0m[34m[INFO] [0mDone version - 141732
+07:08:09 [0m[34m[INFO] [0mDone version - 146374
+07:08:09 [0m[34m[INFO] [0mDone version - 466224
+07:08:09 [0m[34m[INFO] [0mDone version - 486385
+07:08:09 [0m[34m[INFO] [0mDone version - 173535
+07:08:09 [0m[34m[INFO] [0mDone version - 142070
+07:08:09 [0m[34m[INFO] [0mDone version - 180147
+07:08:09 [0m[34m[INFO] [0mfailed to parse "fu/tu/futures-util-preview" registry package: feature `compat` includes `futures01` which is neither a dependency nor another feature
+07:08:09 [0m[34m[INFO] [0mDone version - 262952
+07:08:09 [0m[34m[INFO] [0mDone version - 144805
+07:08:10 [0m[34m[INFO] [0mDone version - 262953
+07:08:10 [0m[34m[INFO] [0mDone version - 178533
+07:08:10 [0m[34m[INFO] [0mDone version - 141369
+07:08:10 [0m[34m[INFO] [0mDone version - 189114
+07:08:10 [0m[34m[INFO] [0mDone version - 144844
+07:08:10 [0m[33m[WARN] [0mfailed to select a version for the requirement `brs = "=0.0.0"`
+candidate versions found which didn't match: 0.2.0, 0.1.0
+location searched: `mirror` index (which is replacing registry `crates-io`)
+required by package `dep v0.1.0 (/home/loancold/Projects/Cargo-Ecosystem-Monitor/Code/rust_deps)`
+perhaps a crate was updated and forgotten to be re-vendored?
+07:08:10 [0m[34m[INFO] [0mDone version - 170203
+07:08:10 [0m[34m[INFO] [0mDone version - 144560
+07:08:10 [0m[34m[INFO] [0mDone version - 398466
+07:08:10 [0m[34m[INFO] [0mDone version - 486393
+07:08:10 [0m[34m[INFO] [0mDone version - 178171
+07:08:10 [0m[34m[INFO] [0mDone version - 212344
+07:08:10 [0m[34m[INFO] [0mDone version - 141383
+07:08:10 [0m[34m[INFO] [0mDone version - 141746
+07:08:10 [0m[34m[INFO] [0mDone version - 492526
+07:08:11 [0m[34m[INFO] [0mDone version - 141748
+07:08:11 [0m[34m[INFO] [0mDone version - 144561
+07:08:11 [0m[34m[INFO] [0mDone version - 498602
+07:08:11 [0m[34m[INFO] [0mDone version - 145851
+07:08:11 [0m[34m[INFO] [0mDone version - 238493
+07:08:11 [0m[34m[INFO] [0mDone version - 142162
