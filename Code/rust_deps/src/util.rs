@@ -1,11 +1,11 @@
 use cargo::core::registry::PackageRegistry;
 use cargo::core::resolver::{CliFeatures, HasDevUnits};
-use cargo::core::Workspace;
+use cargo::core::{Shell, Workspace};
 use cargo::ops;
 use cargo::util::Config;
 
 use std::collections::VecDeque;
-use std::env::current_dir;
+use std::env::{self, current_dir};
 use std::fs::File;
 use std::io::Write;
 use std::panic::catch_unwind;
@@ -14,10 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, Result};
-use crossbeam::channel;
+use crossbeam::channel::{self};
 use log::{error, info, warn};
 use postgres::{Client, NoTls};
-
 
 /// Get a name by crate id.
 ///
@@ -55,6 +54,7 @@ fn get_name_by_version_id(conn: Arc<Mutex<Client>>, version_id: i32) -> Result<S
     get_name_by_crate_id(conn, crate_id)
 }
 
+/// Get give version's version string.
 fn get_version_str_by_version_id(conn: Arc<Mutex<Client>>, version_id: i32) -> Result<String> {
     let query = format!("SELECT num FROM versions WHERE id = {} LIMIT 1", version_id);
     let row = conn.lock().unwrap().query(&query, &[]).unwrap();
@@ -112,6 +112,7 @@ fn get_version_by_name_version(conn: Arc<Mutex<Client>>, name: &str, version: &s
 
 /// Resolve version's dependencies and store them into db.
 fn resolve_store_deps_of_version(
+    thread_id: u32,
     conn: Arc<Mutex<Client>>,
     version_id: i32,
     dep_filename: &str,
@@ -131,18 +132,22 @@ edition = "2021"
 
     file.push_str(&format!("\n{} = \"={}\"", name, num));
 
-    let current_path = current_dir().unwrap();
+    let current_path = current_dir()?;
     let mut current_toml_path = String::new();
+    let dep_filename = format!("dep{}.toml", thread_id);
     current_toml_path.push_str(current_path.to_str().unwrap());
     current_toml_path.push_str("/");
-    current_toml_path.push_str(dep_filename);
+    current_toml_path.push_str(&dep_filename);
 
-    File::create(&current_toml_path)
-        .unwrap()
+    File::create(&current_toml_path)?
         .write_all(file.as_bytes())
         .expect("Write failed");
 
-    let config = Config::default()?;
+    let config = Config::new(
+        Shell::new(),
+        env::current_dir()?,
+        format!("{}/job{}", current_path.to_str().unwrap(), thread_id).into(),
+    );
     let ws = Workspace::new(&Path::new(&current_toml_path), &config)?;
 
     let mut registry = PackageRegistry::new(ws.config())?;
@@ -190,6 +195,7 @@ edition = "2021"
     Ok(())
 }
 
+/// Run dependency resolving in `workers` threads
 pub fn run_deps(workers: usize) {
     let conn = Arc::new(Mutex::new(
         Client::connect(
@@ -249,18 +255,17 @@ pub fn run_deps(workers: usize) {
     // Create threads
     let mut handles = vec![];
     for i in 0..workers {
-        let conn = Arc::clone(&conn);
+        let conn = conn.clone();
         let rx = rx.clone();
 
         handles.push(thread::spawn(move || {
-            let filename = format!("dep{}.toml", i);
             while let Ok(versions) = rx.recv() {
                 for v in versions {
                     if catch_unwind(|| {
                         if let Err(e) =
                             resolve_store_deps_of_version(Arc::clone(&conn), v, &filename, i)
                         {
-                            warn!("{}", e);
+                            warn!("Resolve version {} fails, due to error: {}", v, e);
                         } else {
                             info!("Thread {}: Done version - {}", i, v);
                         }
@@ -296,8 +301,11 @@ pub fn run_deps(workers: usize) {
     std::mem::drop(tx);
 
     for handle in handles {
-        handle.join();
+        // Unsolved problem
+        if handle.join().is_err() {
+            error!("!!!Thread Crash!!!")
+        }
     }
 
-    println!("Resolving Done!");
+    info!(r#"\\\ !Resolving Done! ///"#);
 }

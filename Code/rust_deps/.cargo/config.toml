@@ -1,4 +1,5 @@
-[source]
+[net]
+git-fetch-with-cli = true
 
 [source.mirror]
 registry = "file:///home/loancold/Projects/Cargo-Ecosystem-Monitor/crates.io-index"
