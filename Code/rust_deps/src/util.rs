@@ -114,9 +114,7 @@ fn get_version_by_name_version(conn: Arc<Mutex<Client>>, name: &str, version: &s
 fn resolve_store_deps_of_version(
     thread_id: u32,
     conn: Arc<Mutex<Client>>,
-    version_id: i32,
-    dep_filename: &str,
-    job: usize
+    version_id: i32
 ) -> Result<()> {
     let name = get_name_by_version_id(Arc::clone(&conn), version_id)?;
     let num = get_version_str_by_version_id(Arc::clone(&conn), version_id)?;
@@ -229,7 +227,6 @@ pub fn run_deps(workers: usize) {
         
     // Now, we enable the "Resume from previous"
     if let Some(last) = res.first() {
-        let last: i32 = last.get(0);
         let query = format!(
             "with max_crate as (SELECT MAX(crate_id) 
             FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id) 
@@ -263,7 +260,7 @@ pub fn run_deps(workers: usize) {
                 for v in versions {
                     if catch_unwind(|| {
                         if let Err(e) =
-                            resolve_store_deps_of_version(Arc::clone(&conn), v, &filename, i)
+                            resolve_store_deps_of_version(i as u32,Arc::clone(&conn), v)
                         {
                             warn!("Resolve version {} fails, due to error: {}", v, e);
                         } else {

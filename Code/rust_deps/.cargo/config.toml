@@ -6,6 +6,3 @@ registry = "file:///home/loancold/Projects/Cargo-Ecosystem-Monitor/crates.io-ind
 
 [source.crates-io]
 replace-with = "mirror"
-
-[net]
-git-fetch-with-cli = true
