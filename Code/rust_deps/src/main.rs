@@ -11,13 +11,13 @@ mod util;
 fn main() {
     CombinedLogger::init(vec![
         TermLogger::new(
-            LevelFilter::Info,
+            LevelFilter::Warn,
             simplelog::Config::default(),
             TerminalMode::Mixed,
             ColorChoice::Auto,
         ),
         WriteLogger::new(
-            LevelFilter::Warn,
+            LevelFilter::Info,
             simplelog::Config::default(),
             OpenOptions::new()
                 .read(true)
