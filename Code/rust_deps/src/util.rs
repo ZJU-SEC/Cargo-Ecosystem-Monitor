@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::env::{self, current_dir};
 use std::fs::File;
 use std::io::Write;
-use std::panic::catch_unwind;
+use std::panic::{catch_unwind, self};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -108,6 +108,20 @@ fn get_version_by_name_version(conn: Arc<Mutex<Client>>, name: &str, version: &s
             )
         })?
         .get(0))
+}
+
+/// Get version by name and version string
+///
+/// # Example
+/// ```
+/// store_resolve_error(conn, 362968, false, String::new("Error"));
+/// ```
+fn store_resolve_error(conn: Arc<Mutex<Client>>, version: i32, is_panic:bool, message: String){
+    let query = format! {
+        "INSERT INTO dep_errors(ver, is_panic, error) VALUES ({}, {:?}, '{}');",
+        version, is_panic, message
+    };
+    conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
 }
 
 /// Resolve version's dependencies and store them into db.
@@ -237,9 +251,22 @@ pub fn run_deps(workers: usize) {
             &[],
         )
         .unwrap_or_default();
+    conn.lock()
+        .unwrap()
+        .query(
+            r#"CREATE TABLE IF NOT EXISTS public.dep_errors
+            (
+                ver integer,
+                is_panic boolean,
+                error text COLLATE pg_catalog."default",
+                CONSTRAINT dep_errors_ver_is_panic_error_key UNIQUE (ver, is_panic, error)
+            )"#,
+            &[],
+        )
+        .unwrap_or_default();
 
     // Decide start point
-    let mut offset = 0i64;
+    let mut offset = 0i64;//84472;offset168000,176000;191000;241872
     let res = conn
         .lock()
         .unwrap()
@@ -252,10 +279,9 @@ pub fn run_deps(workers: usize) {
     if let Some(last) = res.first() {
         let last: i32 = last.get(0);
         let query = format!(
-            "SELECT row_number FROM (
-            SELECT ROW_NUMBER() OVER (ORDER BY crate_id ASC),id FROM versions) as temp
-            WHERE id = '{}'",
-            last
+            "with max_crate as (SELECT MAX(crate_id) 
+            FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id) 
+            SELECT COUNT(versions) FROM versions WHERE versions.crate_id<ANY(SELECT max FROM max_crate)"
         );
 
         offset = conn
@@ -282,19 +308,30 @@ pub fn run_deps(workers: usize) {
         handles.push(thread::spawn(move || {
             while let Ok(versions) = rx.recv() {
                 for v in versions {
+                    let old_hook = panic::take_hook();
+                    panic::set_hook({
+                        let conn_copy = conn.clone();
+                        Box::new(move |info| {
+                            let err_message = format!("{:?}",info);
+                            store_resolve_error(Arc::clone(&conn_copy),
+                                    v, true, err_message);
+                        })
+                    });
                     if catch_unwind(|| {
                         if let Err(e) =
                             resolve_store_deps_of_version(i as u32, Arc::clone(&conn), v)
                         {
                             warn!("Resolve version {} fails, due to error: {}", v, e);
+                            store_resolve_error(Arc::clone(&conn), v, false, format!("{:?}",e));
                         } else {
-                            info!("Done resolving version, id = {}", v);
+                            info!("Thread {}: Done version - {}", i, v);
                         }
                     })
                     .is_err()
                     {
-                        error!("Resolving version {} fails, due to error: panic occurs, thread will skip it and keep on running.", v);
+                        error!("Thread {}: Panic occurs, version - {}", i, v);
                     }
+                    panic::set_hook(old_hook); // Must after catch_unwind
                 }
             }
         }));
@@ -316,6 +353,7 @@ pub fn run_deps(workers: usize) {
             tx.send(v).expect("Send task error!");
         }
         offset += 250;
+        warn!("OFFSET = {}", offset);
     }
     
     std::mem::drop(tx);

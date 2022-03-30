@@ -2,14 +2,18 @@
 -- Resolved max crate_id
 SELECT MAX(crate_id) FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id
 -- Find Current Max resolved Offset
-with max_crate as (SELECT MAX(crate_id) FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id) 
+with max_crate as (SELECT MAX(crate_id) 
+FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id) 
 SELECT COUNT(versions) FROM versions WHERE versions.crate_id<ANY(SELECT max FROM max_crate)
 -- Temp backup
 SELECT * FROM versions ORDER BY crate_id asc LIMIT 100 OFFSET 177000
 -- Indirect Current resolved Crates_from counts
 SELECT COUNT(DISTINCT crate_id) FROM dep_version INNER JOIN versions ON dep_version.version_from=versions.crate_id
--- Indirect Current resolved Crates_from counts
+-- Indirect Current resolved Version_from counts
 SELECT COUNT(DISTINCT version_from) FROM dep_version 
+-- Export DATABASE 
+copy dep_version to 'version_dep.csv' WITH CSV DELIMITER ',';
+
 
 -- Basic Query
 -- Version <-> Crates
