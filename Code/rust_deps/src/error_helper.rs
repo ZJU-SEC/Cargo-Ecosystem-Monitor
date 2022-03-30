@@ -1,0 +1,1 @@
+/// Four types: Resolving, Cargo, DB, Others.

@@ -17,7 +17,7 @@ fn main() {
             ColorChoice::Auto,
         ),
         WriteLogger::new(
-            LevelFilter::Warn,
+            LevelFilter::Info,
             simplelog::Config::default(),
             OpenOptions::new()
                 .read(true)
@@ -29,5 +29,6 @@ fn main() {
         ),
     ])
     .unwrap();
+
     run_deps(20)
 }

@@ -4,7 +4,7 @@ use cargo::core::{Shell, Workspace};
 use cargo::ops;
 use cargo::util::Config;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env::{self, current_dir};
 use std::fs::File;
 use std::io::Write;
@@ -114,7 +114,7 @@ fn get_version_by_name_version(conn: Arc<Mutex<Client>>, name: &str, version: &s
 fn resolve_store_deps_of_version(
     thread_id: u32,
     conn: Arc<Mutex<Client>>,
-    version_id: i32
+    version_id: i32,
 ) -> Result<()> {
     let name = get_name_by_version_id(Arc::clone(&conn), version_id)?;
     let num = get_version_str_by_version_id(Arc::clone(&conn), version_id)?;
@@ -161,7 +161,24 @@ edition = "2021"
     )?;
 
     // println!("{:#?}", resolve);
+    // TODO: Preprocess resolve
+    let mut map = HashMap::new();
+    let mut set = HashSet::new();
 
+    for pkg in resolve.iter() {
+        map.insert(
+            (pkg.name().to_string(), pkg.version().to_string()),
+            get_version_by_name_version(
+                Arc::clone(&conn),
+                &pkg.name().to_string(),
+                &pkg.version().to_string(),
+            )?,
+        );
+    }
+
+    // println!("{:#?}", map);
+
+    // Resolve the dep tree.
     let root = resolve.query(&name)?;
     let mut v = VecDeque::new();
     let mut level = 1;
@@ -170,17 +187,10 @@ edition = "2021"
     while let Some(next) = v.pop_front() {
         if let Some(pkg) = next {
             for (pkg, _) in resolve.deps(pkg) {
-                let query = format!(
-                    "INSERT INTO dep_version VALUES({}, {}, {});",
-                    version_id,
-                    get_version_by_name_version(
-                        Arc::clone(&conn),
-                        &pkg.name().to_string(),
-                        &pkg.version().to_string(),
-                    )?,
-                    level
-                );
-                conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
+                set.insert((
+                    map[&(pkg.name().to_string(), pkg.version().to_string())],
+                    level,
+                ));
                 v.push_back(Some(pkg));
             }
         } else {
@@ -189,6 +199,20 @@ edition = "2021"
                 v.push_back(None)
             }
         }
+    }
+
+    // Store dep info into DB.
+    if ! set.is_empty(){
+        let mut query = String::from("INSERT INTO dep_version VALUES");
+        for (version_to, level) in set {
+            query.push_str(&format!(
+                "({}, {}, {}),",
+                version_id, version_to, level,
+            ));
+        }
+        query.pop();
+        query.push(';');
+        conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
     }
     Ok(())
 }
@@ -215,7 +239,7 @@ pub fn run_deps(workers: usize) {
         .unwrap_or_default();
 
     // Decide start point
-    let mut offset = 241872i64;//84472;offset168000,176000;191000;241872
+    let mut offset = 0i64;
     let res = conn
         .lock()
         .unwrap()
@@ -224,14 +248,14 @@ pub fn run_deps(workers: usize) {
             &[],
         )
         .unwrap();
-        
-    // Now, we enable the "Resume from previous"
+
     if let Some(last) = res.first() {
+        let last: i32 = last.get(0);
         let query = format!(
-            "with max_crate as (SELECT MAX(crate_id) 
-            FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id) 
-            SELECT COUNT(versions) FROM versions 
-            WHERE versions.crate_id<ANY(SELECT max FROM max_crate)"
+            "SELECT row_number FROM (
+            SELECT ROW_NUMBER() OVER (ORDER BY crate_id ASC),id FROM versions) as temp
+            WHERE id = '{}'",
+            last
         );
 
         offset = conn
@@ -260,16 +284,16 @@ pub fn run_deps(workers: usize) {
                 for v in versions {
                     if catch_unwind(|| {
                         if let Err(e) =
-                            resolve_store_deps_of_version(i as u32,Arc::clone(&conn), v)
+                            resolve_store_deps_of_version(i as u32, Arc::clone(&conn), v)
                         {
                             warn!("Resolve version {} fails, due to error: {}", v, e);
                         } else {
-                            info!("Thread {}: Done version - {}", i, v);
+                            info!("Done resolving version, id = {}", v);
                         }
                     })
                     .is_err()
                     {
-                        error!("Thread {}: Panic occurs, version - {}", i, v);
+                        error!("Resolving version {} fails, due to error: panic occurs, thread will skip it and keep on running.", v);
                     }
                 }
             }
@@ -292,9 +316,8 @@ pub fn run_deps(workers: usize) {
             tx.send(v).expect("Send task error!");
         }
         offset += 250;
-    	warn!("OFFSET = {}", offset);
     }
-
+    
     std::mem::drop(tx);
 
     for handle in handles {
