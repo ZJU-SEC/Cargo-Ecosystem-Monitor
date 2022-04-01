@@ -11,6 +11,10 @@ SELECT * FROM versions ORDER BY crate_id asc LIMIT 100 OFFSET 177000
 SELECT COUNT(DISTINCT crate_id) FROM dep_version INNER JOIN versions ON dep_version.version_from=versions.crate_id
 -- Indirect Current resolved Version_from counts
 SELECT COUNT(DISTINCT version_from) FROM dep_version 
+-- Yanked versions that have dependencies
+SELECT COUNT(DISTINCT versions.id) FROM dependencies INNER JOIN versions 
+ON versions.id = dependencies.version_id WHERE versions.yanked = true
+
 -- Export DATABASE 
 copy dep_version to 'version_dep.csv' WITH CSV DELIMITER ',';
 
@@ -167,11 +171,12 @@ SELECT version_from, COUNT(DISTINCT version_to) as indirect_dep FROM dep_version
 SELECT version_to, COUNT(DISTINCT version_from) as indirect_dep FROM dep_version GROUP BY version_to ORDER BY indirect_dep desc LIMIT 100
 -- Version with most indirect dependents, full info
 with indirect_deps AS(
-SELECT version_to, COUNT(DISTINCT version_from) as indirect_dep FROM dep_version GROUP BY version_to 
+SELECT version_to, COUNT(DISTINCT version_from) as indirect_dep 
+FROM dep_version GROUP BY version_to ORDER BY indirect_dep desc LIMIT 100
 ),version_name AS (
-SELECT name,versions.id as version_id  FROM versions INNER JOIN crates ON crates.id = versions.crate_id )
-SELECT name, indirect_dep FROM version_name INNER JOIN indirect_deps ON indirect_deps.version_to = version_name.version_id 
-ORDER BY indirect_dep desc LIMIT 100
+SELECT name,versions.id as version_id, num as version_num  FROM versions INNER JOIN crates ON crates.id = versions.crate_id )
+SELECT name, version_num , indirect_dep
+FROM version_name INNER JOIN indirect_deps ON indirect_deps.version_to = version_name.version_id 
 -- Crate with most indirect dependents, full info
 WITH crate_from AS(SELECT DISTINCT versions.crate_id as crate_from,  dep_version.version_to as version_to  
 FROM dep_version INNER JOIN versions ON versions.id=dep_version.version_from),
@@ -181,3 +186,6 @@ indir_crate AS (SELECT crate_to, COUNT(*) as crate_dependents FROM crate_to
 GROUP BY crate_to ORDER BY crate_dependents)
 SELECT name, crate_dependents FROM crates INNER JOIN indir_crate ON crates.id = indir_crate.crate_to 
 ORDER BY crate_dependents desc LIMIT 100
+
+-- Advisory Propagation
+SELECT COUNT(DISTINCT version_from) FROM dep_version WHERE version_to IN (SELECT * FROM advisory);
