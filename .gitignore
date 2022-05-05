@@ -1,3 +1,5 @@
 Code/.DS_Store
 crates.io-index/*
 data/*
+test/*
+**/Cargo.lock

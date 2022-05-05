@@ -14,9 +14,33 @@ SELECT COUNT(DISTINCT version_from) FROM dep_version
 -- Yanked versions that have dependencies
 SELECT COUNT(DISTINCT versions.id) FROM dependencies INNER JOIN versions 
 ON versions.id = dependencies.version_id WHERE versions.yanked = true
+-- Select unresolved version including yanked version)
+SELECT COUNT(*) FROM versions WHERE 
+id NOT IN (SELECT DISTINCT version_from FROM dep_version) AND
+id IN (SELECT DISTINCT version_id FROM dependencies) AND
+id NOT IN (SELECT ver FROM dep_errors) ;
+-- Find ver with no direct dependency
+WITH dep_dis_ver AS
+(SELECT DISTINCT version_from FROM dep_version)
+SELECT * FROM dep_dis_ver WHERE version_from NOT IN (SELECT DISTINCT version_id FROM dependencies) LIMIT 100;
+-- Find crates whose versions are all yanked
+SELECT crate_id FROM versions WHERE crate_id NOT IN 
+(SELECT DISTINCT crate_id FROM versions WHERE yanked = false);
 
 -- Export DATABASE 
 copy dep_version to 'version_dep.csv' WITH CSV DELIMITER ',';
+
+
+
+-- Create Temporate Table for fast query
+
+-- Create Indir Dependency crate->crate_id
+CREATE TABLE dep_crate AS
+WITH crate_from AS
+(SELECT DISTINCT versions.crate_id as crate_from,  dep_version.version_to as version_to  
+FROM dep_version INNER JOIN versions ON versions.id=dep_version.version_from)
+SELECT DISTINCT crate_from.crate_from as crate_from,  versions.crate_id as crate_to  
+FROM crate_from INNER JOIN versions ON versions.id=crate_from.version_to
 
 
 -- Basic Query
@@ -108,10 +132,47 @@ SELECT owner_id  ,COUNT(crate_id) as owned_count FROM crate_owners GROUP BY owne
 with hot_owner  as 
 (SELECT SUM(downloads) as total_downloads, owner_id, COUNT(id) as count_crates FROM crate_owners INNER JOIN crates ON crate_id=id GROUP BY owner_id )
 SELECT name, total_downloads, count_crates  , gh_login as GithubAccount, gh_avatar as GithubAvatar, gh_id as GithubID FROM hot_owner  INNER JOIN users ON owner_id =id ORDER BY total_downloads desc LIMIT 100
+-- Hot Owner by Indir Dependents (Need to build table `dep_crate` first)
+WITH hot_owner AS 
+(SELECT owner_id, COUNT(DISTINCT crate_from) AS total_dependents FROM crate_owners INNER JOIN dep_crate ON crate_id=crate_to GROUP BY owner_id)
+SELECT name, total_dependents, gh_login as GithubAccount, gh_avatar as GithubAvatar, gh_id as GithubID 
+FROM hot_owner INNER JOIN users ON owner_id =id ORDER BY total_dependents desc LIMIT 100
+-- Accumulative Hot Owner by Indir Dependents of TOP `N=50` (`N`<=50)
+-- ATTENTION: It uses table `hot_owner`. 
+DROP TABLE IF EXISTS tmp_owner_indir_crate,tmp_hot_owner_id,accumulate_hot_owners;
+CREATE TEMP TABLE tmp_owner_indir_crate AS
+(SELECT DISTINCT owner_id,  crate_from  FROM crate_owners INNER JOIN dep_crate ON crate_id=crate_to);
+CREATE TEMP TABLE tmp_hot_owner_id AS
+(SELECT owner_id, COUNT(DISTINCT crate_from) AS total_dependents FROM tmp_owner_indir_crate 
+GROUP BY owner_id ORDER BY total_dependents desc LIMIT 100);
+CREATE TABLE accumulate_hot_owners(
+    accumulative_num integer PRIMARY KEY,
+    crates_count integer
+);
+do 
+$$
+declare
+	N integer;
+begin
+	IF EXISTS (
+    SELECT FROM 
+        information_schema.tables 
+    WHERE
+        table_name = 'accumulate_hot_owners'
+    )THEN
+        for N in 1..100 loop
+            INSERT INTO accumulate_hot_owners 
+            SELECT N, COUNT(DISTINCT crate_from) AS total_dependents FROM tmp_owner_indir_crate  WHERE owner_id 
+            IN (SELECT owner_id FROM tmp_hot_owner_id LIMIT N);
+        end loop;
+    END IF;
+end; 
+$$;
+
 -- How many owners do hot crates have
 SELECT name as crate_name, COUNT(owner_id) as owner_count, downloads FROM crates INNER JOIN crate_owners ON id=crate_id GROUP BY id ORDER BY downloads desc LIMIT 100
-
-
+-- Top 500 (Downloads) owners
+SELECT * FROM crate_owners WHERE crate_id IN (SELECT id FROM crates ORDER BY downloads desc LIMIT 500);
 
 
 -- Recent Downloads
@@ -151,6 +212,19 @@ SELECT COUNT(DISTINCT crate_id) FROM dependencies LIMIT 100
 -- Crate -> Crate
 SELECT COUNT(DISTINCT versions.crate_id) FROM dependencies INNER JOIN versions ON versions.id=dependencies.version_id LIMIT 100
 SELECT COUNT(DISTINCT crate_id) FROM dependencies LIMIT 100
+-- Crate -> Crate (Not full yanked)
+
+WITH dep_crate AS (SELECT DISTINCT versions.crate_id AS crate_id FROM dependencies 
+				   INNER JOIN versions ON versions.id=dependencies.version_id )
+SELECT COUNT(crate_id) FROM dep_crate WHERE crate_id NOT IN 
+(SELECT crate_id FROM versions WHERE crate_id NOT IN 
+(SELECT DISTINCT crate_id FROM versions WHERE yanked = false)) LIMIT 100
+
+WITH dep_crate AS (SELECT DISTINCT crate_id AS crate_id FROM dependencies)
+SELECT COUNT(crate_id) FROM dep_crate WHERE crate_id NOT IN 
+(SELECT crate_id FROM versions WHERE crate_id NOT IN 
+(SELECT DISTINCT crate_id FROM versions WHERE yanked = false)) LIMIT 100
+
 -- Version -> Version
 SELECT COUNT(DISTINCT version_from) FROM dep_version LIMIT 100
 SELECT COUNT(DISTINCT version_to) FROM dep_version LIMIT 100
@@ -165,10 +239,22 @@ ORDER BY dependents desc LIMIT 100
 
 
 -- Indirect Dependency
+
+---- Basic
+-- crate <-> crate
+SELECT COUNT(DISTINCT(crate_from)) FROM dep_crate;
+SELECT COUNT(DISTINCT(crate_to)) FROM dep_crate;
+-- version <-> version
+SELECT COUNT(DISTINCT(version_from)) FROM dep_version;
+SELECT COUNT(DISTINCT(version_to)) FROM dep_version;
+
+---- Advanced
 -- Version with most indirect dependency
-SELECT version_from, COUNT(DISTINCT version_to) as indirect_dep FROM dep_version GROUP BY version_from ORDER BY indirect_dep desc LIMIT 100
+SELECT version_from, COUNT(DISTINCT version_to) as indirect_dep FROM dep_version GROUP BY version_from ORDER BY indirect_dep desc LIMIT 100;
+
 -- Version with most indirect dependents
-SELECT version_to, COUNT(DISTINCT version_from) as indirect_dep FROM dep_version GROUP BY version_to ORDER BY indirect_dep desc LIMIT 100
+SELECT version_to, COUNT(DISTINCT version_from) as indirect_dep FROM dep_version GROUP BY version_to ORDER BY indirect_dep desc LIMIT 100;
+
 -- Version with most indirect dependents, full info
 with indirect_deps AS(
 SELECT version_to, COUNT(DISTINCT version_from) as indirect_dep 
@@ -176,16 +262,39 @@ FROM dep_version GROUP BY version_to ORDER BY indirect_dep desc LIMIT 100
 ),version_name AS (
 SELECT name,versions.id as version_id, num as version_num  FROM versions INNER JOIN crates ON crates.id = versions.crate_id )
 SELECT name, version_num , indirect_dep
-FROM version_name INNER JOIN indirect_deps ON indirect_deps.version_to = version_name.version_id 
--- Crate with most indirect dependents, full info
-WITH crate_from AS(SELECT DISTINCT versions.crate_id as crate_from,  dep_version.version_to as version_to  
-FROM dep_version INNER JOIN versions ON versions.id=dep_version.version_from),
-crate_to AS(SELECT DISTINCT crate_from.crate_from as crate_from,  versions.crate_id as crate_to  
-FROM crate_from INNER JOIN versions ON versions.id=crate_from.version_to),
-indir_crate AS (SELECT crate_to, COUNT(*) as crate_dependents FROM crate_to 
-GROUP BY crate_to ORDER BY crate_dependents)
-SELECT name, crate_dependents FROM crates INNER JOIN indir_crate ON crates.id = indir_crate.crate_to 
-ORDER BY crate_dependents desc LIMIT 100
+FROM version_name INNER JOIN indirect_deps ON indirect_deps.version_to = version_name.version_id ;
+
+-- Crate with accumulative crates with most indirect dependents
+DROP TABLE IF EXISTS tmp_hot_dep_crates,accumulate_hot_crates;
+CREATE TEMP TABLE tmp_hot_dep_crates AS
+(SELECT crate_to, COUNT(DISTINCT crate_from) AS total_dependents FROM dep_crate
+GROUP BY crate_to ORDER BY total_dependents desc LIMIT 100);
+CREATE TABLE accumulate_hot_crates(
+    accumulative_num integer PRIMARY KEY,
+    crates_count integer
+);
+do 
+$$
+declare
+	N integer;
+begin
+	IF EXISTS (
+    SELECT FROM 
+        information_schema.tables 
+    WHERE
+        table_name = 'accumulate_hot_crates'
+    )THEN
+        for N in 1..100 loop
+            INSERT INTO accumulate_hot_crates 
+            SELECT N, COUNT(DISTINCT crate_from) AS total_dependents FROM dep_crate  WHERE crate_to 
+            IN (SELECT crate_to FROM tmp_hot_dep_crates LIMIT N);
+        end loop;
+    END IF;
+end; 
+$$;
 
 -- Advisory Propagation
 SELECT COUNT(DISTINCT version_from) FROM dep_version WHERE version_to IN (SELECT * FROM advisory);
+-- "=version" Propagation (rough)
+SELECT COUNT(DISTINCT version_from) FROM dep_version WHERE version_to IN
+(SELECT id  FROM dependencies WHERE req LIKE '=%' AND optional = false);
