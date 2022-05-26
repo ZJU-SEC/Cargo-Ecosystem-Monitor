@@ -2,3 +2,5 @@
 data/*
 test/*
 */Cargo.lock
+*/__pycache__
+Code/nightly_propagation/test_feature/test_feature/__pycache__
