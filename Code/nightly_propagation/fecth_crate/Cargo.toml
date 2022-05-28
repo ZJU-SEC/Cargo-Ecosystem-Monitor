@@ -1,0 +1,18 @@
+[package]
+name = "fecth_crate"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+downloader = "0.2.6"
+postgres = "0.19.2"
+log = "0.4.14"
+simplelog = "^0.10.0"
+anyhow = "1.0.56"
+crossbeam = "0.8.1"
+pbr = "1.0.4"
+flate2 = "1.0.23"
+tar = "0.4.38"
+regex = "1.5.6"
