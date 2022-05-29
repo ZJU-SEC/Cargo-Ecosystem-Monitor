@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{create_dir, remove_dir_all, File};
 use std::io::Read;
 use std::panic::{self, catch_unwind};
@@ -9,8 +10,9 @@ use anyhow::{anyhow, Context, Result};
 use crossbeam::channel::{self};
 use downloader::{Download, Downloader};
 use flate2::read::GzDecoder;
+use lazy_static::lazy_static;
 use log::{error, info, warn};
-use pbr::ProgressBar;
+use pbr::{MultiBar};
 use postgres::{Client, NoTls};
 use regex::Regex;
 use tar::Archive;
@@ -33,6 +35,19 @@ pub fn run(workers: usize) {
             (
                 id INT,
                 feature VARCHAR(40)
+            )"#,
+            &[],
+        )
+        .unwrap();
+
+    conn.lock()
+        .unwrap()
+        .query(
+            r#"CREATE TABLE IF NOT EXISTS public.fails_info
+            (
+                crate_id INT,
+                crate_name VARCHAR(40),
+                info VARCHAR(40)
             )"#,
             &[],
         )
@@ -61,16 +76,18 @@ pub fn run(workers: usize) {
 
     create_dir(Path::new(&format!("on_process"))).unwrap_or_default();
 
-    let mut mpb = ProgressBar::new(all_count as u64);
+    let mb = Arc::new(MultiBar::new());
+    let mut mpb = mb.create_bar(all_count as u64);
     mpb.format("╢▌▌░╟");
     mpb.set((all_count - undone_count) as u64);
 
-    let (tx, rx) = channel::bounded(workers);
+    let (tx, rx) = channel::bounded(2*workers);
 
     let mut handles = vec![];
     for i in 0..workers {
         let rx = rx.clone();
         let conn = Arc::clone(&conn);
+        let mb = Arc::clone(&mb);
 
         // Start Fetching
         handles.push(thread::spawn(move || {
@@ -82,8 +99,10 @@ pub fn run(workers: usize) {
             });
 
             catch_unwind(|| {
+                let mut pb = mb.create_bar(2);
                 let mut downloader = Downloader::builder()
                     .download_folder(Path::new("./on_process"))
+                    .parallel_requests(1)
                     .build()
                     .expect("Fatal Error, build downloader fails!");
 
@@ -91,25 +110,37 @@ pub fn run(workers: usize) {
                     let name = get_name_by_crate_id(Arc::clone(&conn), id)
                         .expect("Fatal Error, get crates name fails!");
 
+                    pb.set(0);
+                    pb.message(&name);
+
                     if let Err(e) = fetch_crate(&mut downloader, &name, &vers) {
                         warn!("Thread {}: Fetch fails: crate {} {}, {}", i, id, name, e);
+                        store_fails_info(Arc::clone(&conn), id, &name, &e.to_string())
                     } else {
+                        pb.inc();
                         if let Err(e) = deal_crate(Arc::clone(&conn), &name, id, &vers) {
                             warn!("Thread {}: Deal fails: crate {} {}, {}", i, id, name, e);
+                            store_fails_info(Arc::clone(&conn), id, &name, &e.to_string())
                         } else {
+                            pb.inc();
                             info!("Thread {}: Done crates - {}", i, id);
                         }
                     }
+                    remove_dir_all(&format!("on_process/{}", name)).unwrap_or_default();
                 }
+
+                pb.finish();
             })
             .unwrap_or_default();
             panic::set_hook(old_hook);
         }));
     }
 
+    handles.push(thread::spawn(move || mb.listen()));
+
     loop {
         let conn = Arc::clone(&conn);
-        let query = format!("SELECT crate_id FROM process_status WHERE status='undone' LIMIT 250",);
+        let query = format!("SELECT crate_id FROM process_status WHERE status='undone' ORDER BY crate_id asc LIMIT 250",);
 
         let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
         if rows.is_empty() {
@@ -121,7 +152,6 @@ pub fn run(workers: usize) {
                 tx.send((crate_id, vers)).unwrap();
                 mpb.inc();
             }
-            break;
         }
     }
 
@@ -133,6 +163,10 @@ pub fn run(workers: usize) {
             error!("!!!Thread Crash!!!")
         }
     }
+
+    mpb.finish();
+
+    println!(r#"\\\ Done! ///"#)
 }
 
 fn fetch_crate(
@@ -157,7 +191,7 @@ fn fetch_crate(
     let res = downloader.download(&dls)?;
 
     if res.iter().any(|res| res.is_err()) {
-        return Err(anyhow!("Download error, {:?}", res));
+        return Err(anyhow!("Download error."));
     }
 
     return Ok(());
@@ -176,7 +210,7 @@ fn deal_crate(
 
         let data = File::open(&format!("on_process/{}/{}.tgz", name, ver))?;
         let mut archive = Archive::new(GzDecoder::new(data));
-        let mut features = vec![];
+        let mut features = HashSet::new();
 
         for file in archive.entries()? {
             let mut file = file?;
@@ -189,17 +223,19 @@ fn deal_crate(
             {
                 let mut buf = String::new();
                 file.read_to_string(&mut buf)?;
-                let re = Regex::new(r"#!\[feature\((.*)\)\]")?;
-                re.captures_iter(&buf)
+                lazy_static! {
+                    static ref RE: Regex = Regex::new(r"//.*|#!\[feature\((.*?)\)\]").unwrap();
+                }
+                RE.captures_iter(&buf)
                     .map(|cap| {
-                        features.extend(
-                            cap.get(1)
-                                .unwrap()
-                                .as_str()
-                                .split(',')
-                                .map(|s| s.trim().to_string())
-                                .collect::<Vec<String>>(),
-                        );
+                        if let Some(cap) = cap.get(1) {
+                            features.extend(
+                                cap.as_str()
+                                    .split(',')
+                                    .map(|s| s.trim().to_string())
+                                    .collect::<Vec<String>>(),
+                            );
+                        }
                     })
                     .count();
             }
@@ -233,8 +269,6 @@ fn deal_crate(
         &[],
     )?;
 
-    remove_dir_all(&format!("on_process/{}", name))?;
-    conn.lock().unwrap().query(&query, &[])?;
     Ok(())
 }
 
@@ -255,4 +289,27 @@ fn get_versions_by_crate_id(conn: Arc<Mutex<Client>>, crate_id: i32) -> Vec<(i32
 
     let row = conn.lock().unwrap().query(&query, &[]).unwrap();
     row.iter().map(|ver| (ver.get(0), ver.get(1))).collect()
+}
+
+fn store_fails_info(conn: Arc<Mutex<Client>>, crate_id: i32, name: &str, info: &str) {
+    conn.lock()
+        .unwrap()
+        .query(
+            &format!(
+                "INSERT INTO fails_info VALUES('{}', '{}', '{}');",
+                crate_id, name, info
+            ),
+            &[],
+        )
+        .expect("Fatal error, store info fails!");
+    conn.lock()
+        .unwrap()
+        .query(
+            &format!(
+                "UPDATE process_status SET status = 'fails' WHERE crate_id = '{}';",
+                crate_id
+            ),
+            &[],
+        )
+        .expect("Fatal error, store info fails!");
 }

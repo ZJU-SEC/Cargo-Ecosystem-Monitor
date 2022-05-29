@@ -273,6 +273,7 @@ dependencies = [
  "crossbeam",
  "downloader",
  "flate2",
+ "lazy_static",
  "log",
  "pbr",
  "postgres",

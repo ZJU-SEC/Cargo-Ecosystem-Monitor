@@ -34,5 +34,5 @@ fn main() {
     ])
     .unwrap();
 
-    run(6)
+    run(12)
 }
