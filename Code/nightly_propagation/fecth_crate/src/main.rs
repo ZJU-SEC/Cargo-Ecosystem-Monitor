@@ -9,13 +9,13 @@ mod util;
 
 use simplelog::*;
 use std::fs::OpenOptions;
-use util::*;
+use util::{run, run_imcomplete};
 
 
 fn main() {
     CombinedLogger::init(vec![
         TermLogger::new(
-            LevelFilter::Warn,
+            LevelFilter::Info,
             simplelog::Config::default(),
             TerminalMode::Mixed,
             ColorChoice::Auto,
@@ -34,5 +34,6 @@ fn main() {
     ])
     .unwrap();
 
-    run(12)
+    // run(1, "fails")
+    // run_imcomplete("imcomplete")
 }

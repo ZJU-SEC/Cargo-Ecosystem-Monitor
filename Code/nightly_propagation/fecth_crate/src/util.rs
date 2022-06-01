@@ -12,14 +12,15 @@ use downloader::{Download, Downloader};
 use flate2::read::GzDecoder;
 use lazy_static::lazy_static;
 use log::{error, info, warn};
-use pbr::{MultiBar};
+use pbr::MultiBar;
 use postgres::{Client, NoTls};
 use regex::Regex;
 use tar::Archive;
 
 // https://crates.io/api/v1/crates/$(crate)/$(version)/download
 
-pub fn run(workers: usize) {
+#[allow(unused)]
+pub fn run(workers: usize, todo_status: &str) {
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -34,7 +35,8 @@ pub fn run(workers: usize) {
             r#"CREATE TABLE IF NOT EXISTS public.version_feature
             (
                 id INT,
-                feature VARCHAR(40)
+                feature VARCHAR(40),
+                UNIQUE(id, feature)
             )"#,
             &[],
         )
@@ -47,26 +49,30 @@ pub fn run(workers: usize) {
             (
                 crate_id INT,
                 crate_name VARCHAR(40),
-                info VARCHAR(40)
+                info VARCHAR(40),
+                time TIMESTAMP DEFAULT current_timestamp
             )"#,
             &[],
         )
         .unwrap();
 
-    let all_count: i64 = conn
-        .lock()
-        .unwrap()
-        .query("SELECT COUNT(id) FROM crates", &[])
-        .unwrap()
-        .first()
-        .unwrap()
-        .get(0);
+    // let all_count: i64 = conn
+    //     .lock()
+    //     .unwrap()
+    //     .query("SELECT COUNT(crate_id) FROM process_status", &[])
+    //     .unwrap()
+    //     .first()
+    //     .unwrap()
+    //     .get(0);
 
-    let undone_count: i64 = conn
+    let todo_count: i64 = conn
         .lock()
         .unwrap()
         .query(
-            "SELECT COUNT(crate_id) FROM process_status WHERE status = 'undone'",
+            &format!(
+                "SELECT COUNT(crate_id) FROM process_status WHERE status = '{}'",
+                todo_status
+            ),
             &[],
         )
         .unwrap()
@@ -77,11 +83,11 @@ pub fn run(workers: usize) {
     create_dir(Path::new(&format!("on_process"))).unwrap_or_default();
 
     let mb = Arc::new(MultiBar::new());
-    let mut mpb = mb.create_bar(all_count as u64);
+    let mut mpb = mb.create_bar(todo_count as u64);
     mpb.format("╢▌▌░╟");
-    mpb.set((all_count - undone_count) as u64);
+    mpb.set(0);
 
-    let (tx, rx) = channel::bounded(2*workers);
+    let (tx, rx) = channel::bounded(2 * workers);
 
     let mut handles = vec![];
     for i in 0..workers {
@@ -140,7 +146,10 @@ pub fn run(workers: usize) {
 
     loop {
         let conn = Arc::clone(&conn);
-        let query = format!("SELECT crate_id FROM process_status WHERE status='undone' ORDER BY crate_id asc LIMIT 250",);
+        let query = format!(
+            "SELECT crate_id FROM process_status WHERE status='{}' ORDER BY crate_id asc LIMIT 250",
+            todo_status
+        );
 
         let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
         if rows.is_empty() {
@@ -149,7 +158,7 @@ pub fn run(workers: usize) {
             let crate_ids: Vec<i32> = rows.iter().map(|crate_id| crate_id.get(0)).collect();
             for crate_id in crate_ids {
                 let vers = get_versions_by_crate_id(Arc::clone(&conn), crate_id);
-                tx.send((crate_id, vers)).unwrap();
+                tx.send((crate_id, vers)).expect("Fatal error, send fails");
                 mpb.inc();
             }
         }
@@ -157,14 +166,14 @@ pub fn run(workers: usize) {
 
     std::mem::drop(tx);
 
+    mpb.finish();
+
     for handle in handles {
         // Unsolved problem
         if handle.join().is_err() {
             error!("!!!Thread Crash!!!")
         }
     }
-
-    mpb.finish();
 
     println!(r#"\\\ Done! ///"#)
 }
@@ -258,7 +267,7 @@ fn deal_crate(
             query.push(';');
         }
 
-        conn.lock().unwrap().query(&query, &[])?;
+        conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
     }
 
     conn.lock().unwrap().query(
@@ -312,4 +321,154 @@ fn store_fails_info(conn: Arc<Mutex<Client>>, crate_id: i32, name: &str, info: &
             &[],
         )
         .expect("Fatal error, store info fails!");
+}
+
+#[allow(unused)]
+/// Processing crates, even if it could fails
+/// 收尾处理
+pub fn run_imcomplete(todo_status: &str) {
+    let conn = Arc::new(Mutex::new(
+        Client::connect(
+            "host=localhost dbname=crates user=postgres password=postgres",
+            NoTls,
+        )
+        .unwrap(),
+    ));
+
+    create_dir(Path::new(&format!("on_process"))).unwrap_or_default();
+
+    let mut downloader = Downloader::builder()
+        .download_folder(Path::new("./on_process"))
+        .build()
+        .expect("Fatal Error, build downloader fails!");
+
+    let query = format!(
+        "SELECT crate_id FROM process_status WHERE status='{}' ORDER BY crate_id asc",
+        todo_status
+    );
+
+    let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
+    let crate_ids: Vec<i32> = rows.iter().map(|crate_id| crate_id.get(0)).collect();
+
+    for crate_id in crate_ids {
+        let name = get_name_by_crate_id(Arc::clone(&conn), crate_id).unwrap();
+        let vers = get_versions_by_crate_id(Arc::clone(&conn), crate_id);
+        if let Err(e) = fetch_crate(&mut downloader, &name, &vers) {
+            warn!("Imcomplete fetch: crate {} {}, {}", crate_id, name, e);
+        }
+
+        if deal_crate_imcomplete(Arc::clone(&conn), &name, crate_id, &vers) {
+            info!("Complete deal: crates {} {}", crate_id, name);
+        } else {
+            warn!("Imcomplete deal: crate {} {}", crate_id, name);
+        }
+    }
+}
+
+fn deal_crate_imcomplete(
+    conn: Arc<Mutex<Client>>,
+    name: &str,
+    crate_id: i32,
+    versions: &Vec<(i32, String)>,
+) -> bool {
+    let res: Vec<bool> = versions
+        .iter()
+        .map(|(version_id, ver)| {
+            if deal_one_imcomplete(Arc::clone(&conn), name, version_id, ver).is_ok() {
+                info!("Done part {} {}", name, ver);
+                true
+            } else {
+                info!("Fail part {} {}", name, ver);
+                false
+            }
+        })
+        .collect();
+
+    if res.iter().all(|&res| res) {
+        conn.lock()
+            .unwrap()
+            .query(
+                &format!(
+                    "UPDATE process_status SET status = 'done' WHERE crate_id = '{}';",
+                    crate_id
+                ),
+                &[],
+            )
+            .unwrap();
+        true
+    } else {
+        conn.lock()
+            .unwrap()
+            .query(
+                &format!(
+                    "UPDATE process_status SET status = 'imcomplete' WHERE crate_id = '{}';",
+                    crate_id
+                ),
+                &[],
+            )
+            .unwrap();
+        false
+    }
+}
+
+fn deal_one_imcomplete(
+    conn: Arc<Mutex<Client>>,
+    name: &str,
+    version_id: &i32,
+    ver: &str,
+) -> Result<()> {
+    let mut query = String::new();
+
+    let data = File::open(&format!("on_process/{}/{}.tgz", name, ver))?;
+    let mut archive = Archive::new(GzDecoder::new(data));
+    let mut features = HashSet::new();
+
+    for file in archive.entries()? {
+        let mut file = file?;
+        if file
+            .header()
+            .path()?
+            .file_name()
+            .unwrap()
+            .eq_ignore_ascii_case("lib.rs")
+        {
+            let mut buf = String::new();
+            file.read_to_string(&mut buf)?;
+            lazy_static! {
+                static ref RE: Regex = Regex::new(r"//.*|#!\[feature\((.*?)\)\]").unwrap();
+            }
+            RE.captures_iter(&buf)
+                .map(|cap| {
+                    if let Some(cap) = cap.get(1) {
+                        features.extend(
+                            cap.as_str()
+                                .split(',')
+                                .map(|s| s.trim().to_string())
+                                .collect::<Vec<String>>(),
+                        );
+                    }
+                })
+                .count();
+        }
+    }
+
+    if features.is_empty() {
+        query.push_str(&format!(
+            "INSERT INTO version_feature (id) VALUES('{}');",
+            version_id
+        ));
+    } else {
+        query.push_str("INSERT INTO version_feature VALUES");
+        features
+            .iter()
+            .map(|feature| {
+                query.push_str(&format!("('{}', '{}'),", version_id, feature));
+            })
+            .count();
+        query.pop();
+        query.push(';');
+    }
+
+    conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
+    Ok(())
 }
