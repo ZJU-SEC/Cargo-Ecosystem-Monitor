@@ -35,7 +35,7 @@ pub fn run(workers: usize, todo_status: &str) {
             r#"CREATE TABLE IF NOT EXISTS public.version_feature
             (
                 id INT,
-                feature VARCHAR(40),
+                feature VARCHAR(40) DEFAULT 'no_feature_used',
                 UNIQUE(id, feature)
             )"#,
             &[],
@@ -55,15 +55,6 @@ pub fn run(workers: usize, todo_status: &str) {
             &[],
         )
         .unwrap();
-
-    // let all_count: i64 = conn
-    //     .lock()
-    //     .unwrap()
-    //     .query("SELECT COUNT(crate_id) FROM process_status", &[])
-    //     .unwrap()
-    //     .first()
-    //     .unwrap()
-    //     .get(0);
 
     let todo_count: i64 = conn
         .lock()
@@ -233,7 +224,7 @@ fn deal_crate(
                 let mut buf = String::new();
                 file.read_to_string(&mut buf)?;
                 lazy_static! {
-                    static ref RE: Regex = Regex::new(r"//.*|#!\[feature\((.*?)\)\]").unwrap();
+                    static ref RE: Regex = Regex::new(r"/\*[\s\S]*?\*/|//.*|#!\[feature\((.*?)\)\]").unwrap();
                 }
                 RE.captures_iter(&buf)
                     .map(|cap| {

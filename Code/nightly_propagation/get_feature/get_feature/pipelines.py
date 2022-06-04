@@ -22,7 +22,8 @@ class FeaturePipeline:
 
         cur.execute('''CREATE TABLE IF NOT EXISTS public.feature_list (
             name VARCHAR(40) PRIMARY KEY,
-            status VARCHAR(40)
+            status VARCHAR(20),
+            info varchar(200)
         )''')
 
         self.conn.commit()
@@ -31,10 +32,12 @@ class FeaturePipeline:
         cur = self.conn.cursor()
 
         for feat_name in self.all_features:
-            status = do_test(feat_name)
+            status, info = do_test(feat_name)
 
-            cur.execute("INSERT INTO feature_list VALUES ('%s', '%s')" % (feat_name, status))
-            print("%s %s" % (feat_name,  status))
+            cur.execute("INSERT INTO feature_list VALUES ('%s', '%s', '%s')" %
+                        (feat_name, status, info))
+
+            print("%s %s" % (feat_name, status))
 
         self.conn.commit()
         self.conn.close()
@@ -54,13 +57,13 @@ def do_test(feat_name):
 
     if len(res.stderr) == 0:
         if res.returncode == 0:
-            return "ok"
+            return "ok", ""
         else:
-            return "others"
+            return "others", "strange status"
     else:
         if res.stderr.find(b"unknown feature") != -1:
-            return "unknown"
+            return "unknown", res.stderr
         elif res.stderr.find(b"incomplete") != -1:
-            return "incomplete"
+            return "incomplete", res.stderr
         else:
-            return "others"
+            return "others", res.stderr

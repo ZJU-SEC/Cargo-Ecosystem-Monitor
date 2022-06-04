@@ -11,7 +11,6 @@ use simplelog::*;
 use std::fs::OpenOptions;
 use util::{run, run_imcomplete};
 
-
 fn main() {
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -34,6 +33,6 @@ fn main() {
     ])
     .unwrap();
 
-    // run(1, "fails")
-    // run_imcomplete("imcomplete")
+    // run(12, "fails")
+    run_imcomplete("fails")
 }

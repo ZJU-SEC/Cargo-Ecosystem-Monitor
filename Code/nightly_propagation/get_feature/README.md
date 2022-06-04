@@ -1,0 +1,1 @@
+This spider crawls feature info from [unstable book](https://doc.rust-lang.org/unstable-book/the-unstable-book.html).
