@@ -33,6 +33,7 @@ conn = psycopg2.connect(
 cur = conn.cursor()
 
 cur.execute('''CREATE TABLE IF NOT EXISTS public.feature_list (
+    id serial,
     name VARCHAR(40) PRIMARY KEY,
     status VARCHAR(20),
     info varchar(200)
@@ -44,7 +45,7 @@ for row in cur.fetchall():
     feat_name = row[0]
     status, info = do_test(feat_name)
 
-    cur.execute("INSERT INTO feature_list VALUES('%s', '%s', '%s')" %
+    cur.execute("INSERT INTO feature_list (name, status, info) VALUES('%s', '%s', '%s')" %
                 (feat_name, status, info))
 
     print("%s %s" % (feat_name, status))
