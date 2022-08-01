@@ -31,9 +31,16 @@ SELECT COUNT(crate_id) FROM dep_crate WHERE crate_id NOT IN
 (SELECT crate_id FROM versions WHERE crate_id NOT IN 
 (SELECT DISTINCT crate_id FROM versions WHERE yanked = false)) LIMIT 100
 
--- Version -> Version
+-- Version -> Version (Indirect)
 SELECT COUNT(DISTINCT version_from) FROM dep_version LIMIT 100
 SELECT COUNT(DISTINCT version_to) FROM dep_version LIMIT 100
+
+-- Standalone crates
+SELECT id FROM crates WHERE id NOT IN
+(SELECT DISTINCT versions.crate_id FROM dependencies INNER JOIN versions ON versions.id=dependencies.version_id)
+AND id NOT IN
+(SELECT DISTINCT crate_id FROM dependencies)
+
 
 -- Top direct dep crates
 WITH dep_crate AS(SELECT DISTINCT versions.crate_id as dep_from,  dependencies.crate_id as dep_to  
@@ -42,3 +49,6 @@ depcount_crate AS(SELECT dep_to, COUNT(*) as dependents FROM dep_crate GROUP BY 
 SELECT name, dep_to, dependents FROM depcount_crate INNER JOIN crates ON dep_to=crates.id 
 ORDER BY dependents desc LIMIT 100
 
+-- Direct Dependency(crate->crate), rough one
+SELECT DISTINCT versions.crate_id, dependencies.crate_id FROM dependencies 
+INNER JOIN versions ON versions.id=dependencies.version_id
