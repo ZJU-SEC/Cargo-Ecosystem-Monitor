@@ -1,0 +1,10 @@
+memory-corruption   : version_count:1873    , query_propagation:157990
+thread-safety       : version_count:586     , query_propagation:63567
+memory-exposure     : version_count:632     , query_propagation:11447
+denial-of-service   : version_count:489     , query_propagation:38734
+crypto-failure      : version_count:256     , query_propagation:9548
+code-execution      : version_count:299     , query_propagation:119541
+format-injection    : version_count:172     , query_propagation:1099
+file-disclosure     : version_count:104     , query_propagation:551
+privilege-escalation: version_count:27      , query_propagation:12
+Total               : version_count:6110    , query_propagation:231081
