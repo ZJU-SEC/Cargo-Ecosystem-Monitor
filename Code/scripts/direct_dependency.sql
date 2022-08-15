@@ -52,3 +52,14 @@ ORDER BY dependents desc LIMIT 100
 -- Direct Dependency(crate->crate), rough one
 SELECT DISTINCT versions.crate_id, dependencies.crate_id FROM dependencies 
 INNER JOIN versions ON versions.id=dependencies.version_id
+
+-- Versions with most direct dependencies
+SELECT version_id, COUNT(crate_id) as deps FROM dependencies GROUP BY version_id ORDER BY deps desc
+
+-- Neweset versions with most direct dependencies
+WITH most_dep_version AS
+(SELECT version_id, COUNT(crate_id) as deps FROM dependencies GROUP BY version_id)
+SELECT crate_id, version_id, name, version_num, deps FROM most_dep_version INNER JOIN crate_newestversion
+ON version_id = newest_version_id ORDER BY deps desc
+
+
