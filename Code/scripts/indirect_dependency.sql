@@ -37,11 +37,13 @@ FROM crates INNER JOIN indirect_deps ON indirect_deps.crate_to = crates.id ;
 -- Crate "Libc" different level indirect "version" dependents
 SELECT * FROM dep_version WHERE version_to IN 
 (SELECT id as version_id FROM versions WHERE crate_id = 795) 
+
 -- Crate "Libc" different level indirect "crate" dependents
 WITH libc_version_indir_dep AS 
 (SELECT * FROM dep_version WHERE version_to IN 
 (SELECT id as version_id FROM versions WHERE crate_id = 795))
-SELECT DISTINCT crate_id, dep_level FROM versions INNER JOIN libc_version_indir_dep ON version_from = id
+SELECT DISTINCT crate_id, dep_level FROM versions INNER JOIN libc_version_indir_dep ON version_from = id;
+
 -- Crate "Libc" different level indirect "crate" dependents with their names
 WITH libc_version_indir_dep_crate AS
 (WITH libc_version_indir_dep AS 
@@ -207,9 +209,36 @@ $$;
 
 -- Advisory Propagation
 SELECT COUNT(DISTINCT version_from) FROM dep_version WHERE version_to IN (SELECT * FROM advisory);
-
-
+-- Advisory Propagation with Advisory Category
+SELECT COUNT(DISTINCT version_from) FROM dep_version 
+WHERE version_to IN (SELECT version_id FROM advisory WHERE categories like '%thread-safety%');
+-- Advisory Version Count with Advisory Category
+SELECT COUNT(DISTINCT version_id) FROM advisory WHERE categories like '%thread-safety%';
 
 -- "=version" Propagation (rough)
 SELECT COUNT(DISTINCT version_from) FROM dep_version WHERE version_to IN
 (SELECT id  FROM dependencies WHERE req LIKE '=%' AND optional = false);
+
+
+-- Max depth of indir dependencies of each version
+SELECT version_to, MAX(dep_level) FROM dep_version GROUP BY version_to;
+-- Max depth of indir dependencies of each version, ecosystem overview
+WITH max_depth_version AS 
+(SELECT version_to, MAX(dep_level) as max_dep FROM dep_version GROUP BY version_to)
+SELECT max_dep, COUNT(max_dep) FROM max_depth_version GROUP BY max_dep ORDER BY max_dep asc
+
+
+-- Evaluation
+-- 1. Find crates with most indirect dependencies 
+SELECT version_from, COUNT( DISTINCT version_to) as indir_dep FROM dep_version 
+GROUP BY version_from ORDER BY indir_dep desc
+-- 2. Get their indirect dependency
+WITH target_dep AS(
+WITH target_version AS 
+(SELECT distinct version_to FROM dep_version
+WHERE version_from = xxx)
+SELECT crate_id, num FROM target_version INNER JOIN versions ON version_to = id)
+SELECT name, num FROM target_dep INNER JOIN crates ON crate_id = id ORDER BY num asc
+
+
+SELECT * FROM accuracy_evaluation_status WHERE status = `unevaluated`
