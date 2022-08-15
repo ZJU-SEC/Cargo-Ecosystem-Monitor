@@ -1,10 +1,21 @@
 -- Sql scripts tools
 -- Resolved max crate_id
 SELECT MAX(crate_id) FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id
+
 -- Find Current Max resolved Offset
 with max_crate as (SELECT MAX(crate_id) 
 FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id) 
 SELECT COUNT(versions) FROM versions WHERE versions.crate_id<ANY(SELECT max FROM max_crate)
+
+-- Find current unresolved crate versions (Takes long time)
+-- Dependencies(Without dev-dep) - yanked - dep_errors - dep_version
+WITH ver_dep AS
+(SELECT DISTINCT version_id as ver FROM dependencies WHERE kind != 2)
+SELECT ver FROM ver_dep
+WHERE ver NOT IN (SELECT id FROM versions WHERE yanked = true) 
+AND ver NOT IN (SELECT DISTINCT ver FROM dep_errors)
+AND ver NOT IN (SELECT DISTINCT version_from FROM dep_version)
+
 
 -- Indirect Current resolved Crates_from counts
 SELECT COUNT(DISTINCT crate_id) FROM dep_version INNER JOIN versions ON dep_version.version_from=versions.crate_id
