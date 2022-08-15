@@ -6,3 +6,4 @@ test/*
 Code/nightly_propagation/test_feature/test_feature/__pycache__
 */target
 Code/nightly_propagation/fecth_crate/target
+./.vscode/*
