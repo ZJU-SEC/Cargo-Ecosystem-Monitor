@@ -35,6 +35,33 @@ pub fn write_dependency_file(path_string: String, dependencies: &HashMap<String,
     }
 }
 
+
+// Write `dependencies` to `file` in csv format, sorted.
+pub fn write_dependency_file_sorted(path_string: String, dependencies: &HashMap<String, HashSet<String>>){
+    let mut content:Vec<String> = Vec::new();
+    let path = Path::new(path_string.as_str());
+    let display = path.display();   
+    let mut file = match File::create(&path) {
+        Err(why) => panic!("couldn't create {}: {}", display, why),
+        Ok(file) => file,
+    };
+    for(crate_name, versions) in dependencies {
+        for version in versions {
+            let dep_name = format!("{},", crate_name);
+            let dep_ver = format!("{}", version);
+            let line = dep_name+ &dep_ver + "\n";
+            content.push(line);
+        }
+    }
+    content.sort();
+    for line in content {
+        if let Err(why) = file.write_all(line.as_bytes()) {
+            panic!("couldn't write to {}: {}", path.display(), why);
+        }
+    }
+}
+
+
 pub fn get_dependency_num(dependencies: &HashMap<String, HashSet<String>>) -> usize {
     let mut num = 0;
     for (_, versions) in dependencies {
