@@ -214,6 +214,15 @@ SELECT COUNT(DISTINCT version_from) FROM dep_version
 WHERE version_to IN (SELECT version_id FROM advisory WHERE categories like '%thread-safety%');
 -- Advisory Version Count with Advisory Category
 SELECT COUNT(DISTINCT version_id) FROM advisory WHERE categories like '%thread-safety%';
+-- Hot version impacted by advisory
+WITH hot_advisory_crate_ver AS
+(WITH hot_advisory_ver AS
+(SELECT version_id, categories, COUNT(DISTINCT version_from) as indir_dep FROM advisory INNER JOIN dep_version
+ON version_id = version_to GROUP BY version_id, categories )
+SELECT crate_id, num, categories, indir_dep FROM hot_advisory_ver INNER JOIN versions 
+ON id= version_id)
+SELECT name, num as version_num, categories, indir_dep 
+FROM hot_advisory_crate_ver INNER JOIN crates ON id = crate_id ORDER BY indir_dep desc
 
 -- "=version" Propagation (rough)
 SELECT COUNT(DISTINCT version_from) FROM dep_version WHERE version_to IN
