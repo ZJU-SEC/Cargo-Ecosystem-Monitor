@@ -105,16 +105,6 @@ fn run(){
 
         // Thread Operation
         handles.push(thread::spawn(move || {
-            let mut targets:Vec<&str> = Vec::new();
-            let output = Command::new("rustup").arg("target")
-                                            .arg("list")
-                                            .output().expect("Can't get rust targets!").stdout;
-            let output_str = String::from_utf8_lossy(&output);
-            let mut lines = output_str.lines();
-            while let Some(line) = lines.next() {
-                targets.push(line.clone());
-            }
-
             let old_hook = panic::take_hook();
             panic::set_hook({
                 Box::new(move |info| {
@@ -140,7 +130,7 @@ fn run(){
                         store_fails_info(Arc::clone(&conn), crate_info.crate_id)
                     } else {
                         pb.inc();
-                        if let Err(e) = deal_crate(Arc::clone(&conn), &targets, &crate_info) {
+                        if let Err(e) = deal_crate(Arc::clone(&conn), &crate_info) {
                             warn!("Thread {}: Deal fails: crate {:?}, {}", i, crate_info, e);
                             store_fails_info(Arc::clone(&conn), crate_info.crate_id)
                         } else {
@@ -179,12 +169,11 @@ fn run(){
 
 fn deal_crate(
     conn: Arc<Mutex<Client>>,
-    targets: &Vec<&str>, 
     crate_info: &CrateInfo,
 ) -> Result<()> {
     // Get resolution results of both pipeline and cargo tree
     // Extract each dependency, deduplicate and store in csv format
-    let cargotree_crates = cargo_tree_resolution(targets, crate_info);
+    let cargotree_crates = cargo_tree_resolution(crate_info);
     let path_string = format!("{}/{}-{}.csv", CARGOTREE_DEPENDENCYDIR, crate_info.name, crate_info.version_num);
     write_dependency_file(path_string, &cargotree_crates);
 
@@ -203,7 +192,6 @@ fn deal_crate(
 
 
 fn cargo_tree_resolution(
-    targets: &Vec<&str>, 
     crate_info: &CrateInfo
 ) -> HashMap<String, HashSet<String>>{
     let name = &crate_info.name;
@@ -228,26 +216,24 @@ fn cargo_tree_resolution(
     // Data structure of `dependencies`: HashMap<crate_name, HashSet<versions> >
     let mut dependencies:HashMap<String, HashSet<String>> = HashMap::new();
     let re = Regex::new(r"[\w-]+ v[0-9]+.[0-9]+.[0-9]+[\S]*").unwrap();
-    for target in targets {
-        let output = Command::new("cargo").arg("tree")
-                                            .arg("--manifest-path")
-                                            .arg(format!("{}/{}/{}-{}/Cargo.toml", CRATESDIR, name, name, version)) // toml path
-                                            .arg("-e")
-                                            .arg("no-dev")
-                                            .arg("--all-features")
-                                            .arg("--target")
-                                            .arg(target)
-                                            .output().expect("tree exec error!");
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        for cap in re.captures_iter(&output_str) {
-            let dep = &cap[0];
-            let name_ver:Vec<&str> = dep.split(' ').collect();
-            let dep_name = String::from(name_ver[0]);
-            let mut dep_ver = String::from(name_ver[1]);
-            dep_ver.remove(0); // Remove char 'v' at the beginning of dep_ver
-            let crate_name = dependencies.entry(dep_name).or_insert(HashSet::new());
-            (*crate_name).insert(dep_ver);
-        }
+    let output = Command::new("cargo").arg("tree")
+                                        .arg("--manifest-path")
+                                        .arg(format!("{}/{}/{}-{}/Cargo.toml", CRATESDIR, name, name, version)) // toml path
+                                        .arg("-e")
+                                        .arg("no-dev")
+                                        .arg("--all-features")
+                                        .arg("--target")
+                                        .arg("all")
+                                        .output().expect("tree exec error!");
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    for cap in re.captures_iter(&output_str) {
+        let dep = &cap[0];
+        let name_ver:Vec<&str> = dep.split(' ').collect();
+        let dep_name = String::from(name_ver[0]);
+        let mut dep_ver = String::from(name_ver[1]);
+        dep_ver.remove(0); // Remove char 'v' at the beginning of dep_ver
+        let crate_name = dependencies.entry(dep_name).or_insert(HashSet::new());
+        (*crate_name).insert(dep_ver);
     }
     let crate_name = dependencies.entry(String::from(name)).or_insert(HashSet::new());
     (*crate_name).remove(&String::from(version)); // Remove current version
