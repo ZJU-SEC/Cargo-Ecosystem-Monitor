@@ -15,9 +15,9 @@ use std::process::Command;
 use std::io::prelude::*;
 
 use simplelog::*;
-use anyhow::{ Result};
+use anyhow::{anyhow, Result};
 use crossbeam::channel::{self};
-use downloader::{Downloader};
+use downloader::{Downloader, Download};
 use log::{error, info, warn};
 use pbr::MultiBar;
 use postgres::{Client, NoTls};
@@ -116,4 +116,193 @@ fn cargo_lock_resolution(){
             }
         }
     }
+}
+
+
+const DEBUGDIR:&str = "debug";
+
+#[test]
+/// This is used to find difference between pipeline and cargo tree resolution.
+/// It outputs contents as follows:
+/// 1. Crate id and version id
+/// 2. Crates.io Web Url
+/// 3. Source Code (Including newest Cargo.lock)
+/// 4. Sorted Cargo tree Resolution Results
+/// 5. Sorted Pipeline Resolution Results
+/// 6. Dependency Analysis results
+/// 7. Pipeline Resolve Error, if exists.
+fn display_full_information_of_crate() -> Result<()>{
+    let name = "coreutils";
+    let version = "0.0.14";
+    let conn = Arc::new(Mutex::new(
+        Client::connect(
+            "host=localhost dbname=crates user=postgres password=postgres",
+            NoTls,
+        )
+        .unwrap(),
+    ));
+
+
+    // 1. Crate id and version id
+    let crate_id:i32 = conn.lock().unwrap()    
+                                .query(
+                                    &format!(r#"SELECT id FROM crates WHERE name = '{}'"#, name),
+                                    &[],
+                                ).unwrap().first().unwrap().get(0);
+    println!("crate_id = {}", crate_id);
+    let version_id:i32 = conn.lock().unwrap()    
+                                .query(
+                                    &format!(r#"SELECT id FROM versions WHERE crate_id = {} AND num = '{}'"#
+                                    , crate_id, version),
+                                    &[],
+                                ).unwrap().first().unwrap().get(0);
+    println!("version_id = {}", version_id);
+
+    // 2. Crates.io Web Url
+    let url = format!("https://crates.io/crates/{}/{}", name, version);
+    println!("url = {}", url);
+
+
+    // 3. Source Code (Including newest Cargo.lock)
+    remove_dir_all(DEBUGDIR).unwrap_or_default();
+    create_dir(Path::new(DEBUGDIR)).unwrap_or_default();
+    let mut downloader = Downloader::builder()
+                    .download_folder(Path::new(DEBUGDIR))
+                    .parallel_requests(1)
+                    .build()
+                    .expect("Fatal Error, build downloader fails!");
+    let mut dls = vec![];
+    create_dir(Path::new(&format!("{}/{}", DEBUGDIR, name))).unwrap_or_default();
+    dls.push(
+        Download::new(&format!(
+            "https://crates.io/api/v1/crates/{}/{}/download",
+            name, version
+        ))
+        .file_name(Path::new(&format!("{}/{}.tgz", name, version))),
+    );
+    let res = downloader.download(&dls)?;
+    if res.iter().any(|res| res.is_err()) {
+        return Err(anyhow!("Download error."));
+    }
+    // Decompress
+    let output = Command::new("tar").arg("-zxf")
+                                    .arg(format!("{}/{}/{}.tgz", DEBUGDIR, name, version))
+                                    .arg("-C")
+                                    .arg(format!("{}/{}", DEBUGDIR, name))
+                                    .output().expect("Ungzip exec error!");
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    println!("Decompress {}/{}/{}.tgz success: {}", DEBUGDIR, name, version, output_str);
+    // Create newest lock file (Remove lock file to keep it up-to-date)
+    let output = Command::new("rm").arg(format!("{}/{}/{}-{}/Cargo.lock", DEBUGDIR, name, name, version))
+                                    .output().expect("rm Cargo.lock exec error!");
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    println!("Remove Cargo.lock {}/{}/{}-{}/Cargo.lock success: {}", DEBUGDIR, name, name, version, output_str);
+    
+
+    // 4. Sorted Cargo tree Resolution Results
+    // Run `cargo tree` in each target, get union of their dependency graph as final results.
+    // Data structure of `dependencies`: HashMap<crate_name, HashSet<versions>>
+    let mut cargotree_crates:HashMap<String, HashSet<String>> = HashMap::new();
+    let re = Regex::new(r"[\w-]+ v[0-9]+.[0-9]+.[0-9]+[\S]*").unwrap();
+    let output = Command::new("cargo").arg("tree")
+                                        .arg("--manifest-path")
+                                        .arg(format!("{}/{}/{}-{}/Cargo.toml", DEBUGDIR, name, name, version)) // toml path
+                                        .arg("-e")
+                                        .arg("no-dev")
+                                        .arg("--all-features")
+                                        .arg("--target")
+                                        .arg("all ")
+                                        .output().expect("tree exec error!");
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    for cap in re.captures_iter(&output_str) {
+        let dep = &cap[0];
+        let name_ver:Vec<&str> = dep.split(' ').collect();
+        let dep_name = String::from(name_ver[0]);
+        let mut dep_ver = String::from(name_ver[1]);
+        dep_ver.remove(0); // Remove char 'v' at the beginning of dep_ver
+        let crate_name = cargotree_crates.entry(dep_name).or_insert(HashSet::new());
+        (*crate_name).insert(dep_ver);
+    }
+    let crate_name = cargotree_crates.entry(String::from(name)).or_insert(HashSet::new());
+    (*crate_name).remove(&String::from(version)); // Remove current version
+    let path_string = format!("{}/{}-{}-cargotree.csv", DEBUGDIR, name, version);
+    write_dependency_file_sorted(path_string, &cargotree_crates);
+
+
+    // 5. Sorted Pipeline Resolution Results
+    let mut pipeline_crates:HashMap<String, HashSet<String>> = HashMap::new();
+    let query = format!(
+        "WITH target_dep AS(
+            WITH target_version AS 
+            (SELECT distinct version_to FROM dep_version
+            WHERE version_from = {})
+            SELECT crate_id, num FROM target_version INNER JOIN versions ON version_to = id)
+            SELECT name, num FROM target_dep INNER JOIN crates ON crate_id = id ORDER BY num asc
+        ", version_id
+    );
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
+    for ver in row {
+        let dep_name = ver.get(0);
+        let dep_ver = ver.get(1);
+        let crate_name = pipeline_crates.entry(dep_name).or_insert(HashSet::new());
+        (*crate_name).insert(dep_ver);
+    }
+    let path_string = format!("{}/{}-{}-pipeline.csv", DEBUGDIR, name, version);
+    write_dependency_file_sorted(path_string, &pipeline_crates);
+
+
+    // 6. Dependency Analysis results
+    let cargotree_crates_num = get_dependency_num(&cargotree_crates);
+    let pipeline_crates_num = get_dependency_num(&pipeline_crates);
+    let mut overresolve_dep = 0;
+    let mut right_dep = 0;
+    let mut wrong_dep = 0;
+    let mut missing_dep = 0;
+    // Four types of results:
+    // Over-resolve, Right/Wrong-resolve, Missing-resolve
+    for(crate_name, versions) in &pipeline_crates {
+        // Over-resolve: No such dep, but resolves.
+        if !cargotree_crates.contains_key(crate_name){
+            overresolve_dep += versions.len();
+        }
+        else{
+            // Right/wrong-resolve: 
+            // Compare results to see if resolution results is right
+            for version in versions {
+                if cargotree_crates[crate_name].contains(version){
+                    right_dep += 1;
+                }
+                else{
+                    wrong_dep += 1;
+                }
+            }
+        }
+    }
+    // Missing-resolve: Crates exsits but is not resolved.
+    for(crate_name, versions) in &cargotree_crates {
+        if !pipeline_crates.contains_key(crate_name){
+            missing_dep += versions.len();
+        }
+    }
+    let line = format!("
+        cargotree_crates_num = {}
+        pipeline_crates_num = {}
+        overresolve_dep = {}
+        right_dep = {}
+        wrong_dep = {}
+        missing_dep = {}
+        ", 
+        cargotree_crates_num,
+        pipeline_crates_num ,
+        overresolve_dep,
+        right_dep,
+        wrong_dep,
+        missing_dep
+    );
+    println!("Results: \n{}", line);
+
+
+    // 7. Pipeline Resolve Error, if exists.
+
+    Ok(())
 }
