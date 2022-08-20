@@ -3,5 +3,5 @@ path = crates.io-index
 url = github.com/rust-lang/crates.io-index
 
 [submodule "rust"]
-path = rustc
-url = github.com/Yinwhe/rust
+	path = rust
+	url = https://github.com/Yinwhe/rust
