@@ -19,7 +19,7 @@ use regex::Regex;
 use accuracy_evaluation::tools::db::*;
 use accuracy_evaluation::tools::helper::*;
 
-const THREADNUM:usize = 2; // Thread number
+const THREADNUM:usize = 20; // Thread number
 const CRATES_NUM:i64 = 1000; // Evaluated crate sample number
 
 fn main() {
@@ -86,7 +86,7 @@ fn run(){
         )
         .unwrap(),
     ));
-    let unevaluated_crates = find_unevaluated_crates(Arc::clone(&conn));
+    let unevaluated_crates = find_unevaluated_crates_hot(Arc::clone(&conn));
     let workers = THREADNUM;
 
     let mb = Arc::new(MultiBar::new());
