@@ -16,14 +16,17 @@ use pbr::MultiBar;
 use postgres::{Client, NoTls};
 use regex::Regex;
 use tar::Archive;
+use toml::Value;
 
 // https://crates.io/api/v1/crates/$(crate)/$(version)/download
+
+const RUSTC: &str = "/Users/wyffeiwhe/Desktop/rust/build/x86_64-apple-darwin/stage1/bin/rustc";
 
 #[allow(unused)]
 pub fn run(workers: usize, todo_status: &str) {
     let conn = Arc::new(Mutex::new(
         Client::connect(
-            "host=localhost dbname=crates user=postgres password=postgres",
+            "host=localhost dbname=crates_08_22 user=postgres password=postgres",
             NoTls,
         )
         .unwrap(),
@@ -112,7 +115,7 @@ pub fn run(workers: usize, todo_status: &str) {
 
                     if let Err(e) = fetch_crate(&mut downloader, &name, &vers) {
                         warn!(
-                            "Thread {}: Fetch incomplete: crate {} {}, {}",
+                            "Thread {}: Fetch incomplete: crate {} {}, \n{}",
                             i, id, name, e
                         );
                         store_fails_info(Arc::clone(&conn), id, &name, &e.to_string())
@@ -122,7 +125,7 @@ pub fn run(workers: usize, todo_status: &str) {
 
                     if let Err(e) = deal_crate(Arc::clone(&conn), &name, id, &vers) {
                         warn!(
-                            "Thread {}: Deal incomplete: crate {} {}, {}",
+                            "Thread {}: Deal incomplete: crate {} {}, \n{}",
                             i, id, name, e
                         );
                         store_fails_info(Arc::clone(&conn), id, &name, &e.to_string())
@@ -131,7 +134,7 @@ pub fn run(workers: usize, todo_status: &str) {
                     pb.inc();
                     info!("Thread {}: Done crates - {}", i, id);
 
-                    // remove_dir_all(&format!("on_process/{}", name)).unwrap_or_default();
+                    remove_dir_all(&format!("on_process/{}", name)).unwrap_or_default();
                 }
 
                 pb.finish();
@@ -167,7 +170,7 @@ pub fn run(workers: usize, todo_status: &str) {
             let crate_ids: Vec<i32> = rows.iter().map(|crate_id| crate_id.get(0)).collect();
 
             for crate_id in crate_ids {
-                let vers = get_versions_by_crate_id(Arc::clone(&conn), crate_id);
+                let vers = get_latest_versions_by_crate_id(Arc::clone(&conn), crate_id);
                 tx.send((crate_id, vers)).expect("Fatal error, send fails");
                 mpb.inc();
             }
@@ -261,48 +264,78 @@ fn deal_one_version(
 ) -> Result<(), Error> {
     let data = File::open(&format!("on_process/{}/{}.tgz", name, ver))?;
     let libfile = format!("on_process/{}/lib.rs", name);
+    let mut edition = String::from("2015");
     let mut archive = Archive::new(GzDecoder::new(data));
     let mut features = vec![];
+    let mut to_dos = vec![];
 
-    for file in archive.entries()? {
+    for file in &mut archive.entries()? {
         let mut file = file?;
-        if file
+        let file_name = file
             .header()
             .path()?
             .file_name()
-            .unwrap()
-            .eq_ignore_ascii_case("lib.rs")
-        {
-            let mut buf = String::new();
-            file.read_to_string(&mut buf)?;
-            File::create(&libfile).unwrap().write_all(buf.as_bytes())?;
+            .expect("Fatal error, get file name fails")
+            .to_owned();
 
-            let exec = Command::new(
-                "/Users/wyffeiwhe/Desktop/rust/build/x86_64-apple-darwin/stage1/bin/rustc",
-            )
+        if file_name.eq_ignore_ascii_case("lib.rs") {
+            let mut buf = String::new();
+
+            file.read_to_string(&mut buf)?;
+            to_dos.push(buf);
+        } else if file_name.eq_ignore_ascii_case("Cargo.toml") {
+            let mut buf = String::new();
+            file.read_to_string(&mut buf).unwrap();
+
+            let toml = buf.parse::<Value>().unwrap();
+            edition = toml
+                .get("package")
+                .map(|v| {
+                    v.get("edition")
+                        .map(|v| v.as_str().unwrap_or("2015"))
+                        .unwrap_or("2015")
+                })
+                .unwrap_or("2015")
+                .to_owned();
+        }
+    }
+
+    for buf in &mut to_dos {
+        File::create(&libfile).unwrap().write_all(buf.as_bytes())?;
+
+        let exec = Command::new(RUSTC)
+            .arg("--edition")
+            .arg(&edition)
             .arg("--nft-analysis")
             .arg(&libfile)
             .output()?;
 
-            if exec.status.success() {
-                let out = String::from_utf8(exec.stdout).unwrap();
+        if exec.status.success() {
+            let out = String::from_utf8(exec.stdout).unwrap();
 
-                lazy_static! {
-                    static ref RE: Regex = Regex::new(r#"\(\[(.*?)\], (.*?)\)"#).unwrap();
-                }
+            lazy_static! {
+                static ref RE: Regex = Regex::new(r#"\(\[(.*?)\], (.*?)\)"#).unwrap();
+            }
 
-                RE.captures_iter(&out)
-                    .map(|cap| {
-                        if let (Some(cond), Some(feat)) = (cap.get(1), cap.get(2)) {
-                            features.push((
-                                cond.as_str().trim_matches('"').to_string(),
-                                feat.as_str().to_string(),
-                            ));
-                        }
-                    })
-                    .count();
-            } else {
+            RE.captures_iter(&out)
+                .map(|cap| {
+                    if let (Some(cond), Some(feat)) = (cap.get(1), cap.get(2)) {
+                        features.push((cond.as_str().to_string(), feat.as_str().to_string()));
+                    }
+                })
+                .count();
+        } else {
+            let out = String::from_utf8(exec.stderr).unwrap();
+
+            if out.contains("rustc resolve feature fails") {
                 return Err(anyhow!("rustc analysis {} {} fails", name, ver));
+            } else {
+                return Err(anyhow!(
+                    "rustc other fails, detail:{}, version: {} {}",
+                    out.lines().nth(0).unwrap(),
+                    name,
+                    ver
+                ));
             }
         }
     }
@@ -340,9 +373,20 @@ fn get_name_by_crate_id(conn: Arc<Mutex<Client>>, crate_id: i32) -> Result<Strin
         .get(0))
 }
 
+#[allow(unused)]
 fn get_versions_by_crate_id(conn: Arc<Mutex<Client>>, crate_id: i32) -> Vec<(i32, String)> {
     let query = format!(
         "SELECT id,num FROM versions WHERE crate_id = '{}'",
+        crate_id
+    );
+
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
+    row.iter().map(|ver| (ver.get(0), ver.get(1))).collect()
+}
+
+fn get_latest_versions_by_crate_id(conn: Arc<Mutex<Client>>, crate_id: i32) -> Vec<(i32, String)> {
+    let query = format!(
+        "SELECT id, num FROM versions WHERE id = (SELECT MAX(id) FROM versions WHERE crate_id = {})",
         crate_id
     );
 
@@ -365,52 +409,81 @@ fn store_fails_info(conn: Arc<Mutex<Client>>, crate_id: i32, name: &str, info: &
 
 #[test]
 fn test() {
-    let data = File::open("./chrono-0.2.4.crate").unwrap();
+    let data = File::open("vcpkg-0.2.15.tgz").unwrap();
+    let libfile = "lib.rs";
+    let mut edition = String::from("2015");
     let mut archive = Archive::new(GzDecoder::new(data));
     let mut features = vec![];
+    let mut to_dos = vec![];
 
-    for file in archive.entries().unwrap() {
+    for file in &mut archive.entries().unwrap() {
         let mut file = file.unwrap();
-        if file
+        let file_name = file
             .header()
             .path()
             .unwrap()
             .file_name()
-            .unwrap()
-            .eq_ignore_ascii_case("lib.rs")
-        {
+            .expect("Fatal error, get file name fails")
+            .to_owned();
+
+        if file_name.eq_ignore_ascii_case("lib.rs") {
             let mut buf = String::new();
             file.read_to_string(&mut buf).unwrap();
-            File::create("./lib.rs")
-                .unwrap()
-                .write_all(buf.as_bytes())
-                .unwrap();
 
-            let exec = Command::new(
-                "/Users/wyffeiwhe/Desktop/rust/build/x86_64-apple-darwin/stage1/bin/rustc",
-            )
+            to_dos.push(buf)
+        } else if file_name.eq_ignore_ascii_case("Cargo.toml") {
+            let mut buf = String::new();
+            file.read_to_string(&mut buf).unwrap();
+
+            let toml = buf.parse::<Value>().unwrap();
+            edition = toml
+                .get("package")
+                .map(|v| {
+                    v.get("edition")
+                        .map(|v| v.as_str().unwrap_or("2015"))
+                        .unwrap_or("2015")
+                })
+                .unwrap_or("2015")
+                .to_owned();
+        }
+    }
+
+    for buf in to_dos {
+        File::create(&libfile)
+            .unwrap()
+            .write_all(buf.as_bytes())
+            .unwrap();
+
+        let exec = Command::new(RUSTC)
+            .arg("--edition")
+            .arg(&edition)
             .arg("--nft-analysis")
-            .arg("./lib.rs")
+            .arg(&libfile)
             .output()
             .unwrap();
+
+        if exec.status.success() {
+            let out = String::from_utf8(exec.stdout).unwrap();
 
             lazy_static! {
                 static ref RE: Regex = Regex::new(r#"\(\[(.*?)\], (.*?)\)"#).unwrap();
             }
 
-            if exec.status.success() {
-                let out = String::from_utf8(exec.stdout).unwrap();
+            RE.captures_iter(&out)
+                .map(|cap| {
+                    if let (Some(cond), Some(feat)) = (cap.get(1), cap.get(2)) {
+                        features.push((cond.as_str().to_string(), feat.as_str().to_string()));
+                    }
+                })
+                .count();
+            println!("{:?}", features);
+        } else {
+            let out = String::from_utf8(exec.stderr).unwrap();
 
-                RE.captures_iter(&out)
-                    .map(|cap| {
-                        if let (Some(cond), Some(feat)) = (cap.get(1), cap.get(2)) {
-                            features.push((cond.as_str().to_string(), feat.as_str().to_string()));
-                        }
-                    })
-                    .count();
-                println!("{:?}", features);
+            if out.contains("rustc resolve feature fails") {
+                println!("rustc analysis fails");
             } else {
-                println!("rustc analysis fails: {}", String::from_utf8(exec.stderr).unwrap());
+                println!("rustc other fails, detail:{}", out.lines().nth(0).unwrap());
             }
         }
     }

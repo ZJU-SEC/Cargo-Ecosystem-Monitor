@@ -4,6 +4,7 @@ extern crate crossbeam;
 extern crate simplelog;
 extern crate tar;
 extern crate flate2;
+extern crate toml;
 
 mod util;
 
@@ -33,6 +34,6 @@ fn main() {
     ])
     .unwrap();
 
-    run(8, "undone")
+    run(8, "incomplete")
     // run_imcomplete("undone")
 }
