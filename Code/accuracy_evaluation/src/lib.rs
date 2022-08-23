@@ -41,8 +41,8 @@ fn cargo_lock_resolution(){
                     .parallel_requests(1)
                     .build()
                     .expect("Fatal Error, build downloader fails!");
-    let name = "coreutils";
-    let version = "0.0.14";
+    let name = "slab";
+    let version = "0.4.7";
     // Download crate source code
     if let Err(e) = fetch_crate(&mut downloader, &name, &version) {
        println!("Fetch fails: crate {}/{}, {}", name, version, e);
@@ -75,7 +75,7 @@ fn cargo_lock_resolution(){
                         .expect("Can't open Cargo.lock file");
         let mut lockdep = String::new();
         lockfile.read_to_string(&mut lockdep).expect("Read Cargo.lock file fail");
-        println!("Content: {}", lockdep);
+        // println!("Content: {}", lockdep);
         
         // Create File
         let path_string = format!("{}/{}/dependencies.csv", CRATESDIR, name);
@@ -132,8 +132,8 @@ const DEBUGDIR:&str = "debug";
 /// 6. Dependency Analysis results
 /// 7. Pipeline Resolve Error, if exists.
 fn display_full_information_of_crate() -> Result<()>{
-    let name = "coreutils";
-    let version = "0.0.14";
+    let name = "pallet-contracts";
+    let version = "3.0.0";
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -211,9 +211,10 @@ fn display_full_information_of_crate() -> Result<()>{
                                         .arg("no-dev")
                                         .arg("--all-features")
                                         .arg("--target")
-                                        .arg("all ")
+                                        .arg("all")
                                         .output().expect("tree exec error!");
     let output_str = String::from_utf8_lossy(&output.stdout);
+    // println!("dep: {}", output_str);
     for cap in re.captures_iter(&output_str) {
         let dep = &cap[0];
         let name_ver:Vec<&str> = dep.split(' ').collect();
@@ -249,6 +250,9 @@ fn display_full_information_of_crate() -> Result<()>{
     }
     let path_string = format!("{}/{}-{}-pipeline.csv", DEBUGDIR, name, version);
     write_dependency_file_sorted(path_string, &pipeline_crates);
+    if pipeline_crates.is_empty() {
+        println!("Pipeline hasn't resolved it yet!");
+    }
 
 
     // 6. Dependency Analysis results
@@ -303,6 +307,14 @@ fn display_full_information_of_crate() -> Result<()>{
 
 
     // 7. Pipeline Resolve Error, if exists.
+    let query = format!(
+        "SELECT error FROM dep_errors WHERE ver = {}
+        ", version_id
+    );
+    if let Some(row) = conn.lock().unwrap().query(&query, &[]).unwrap().first(){
+        let error:String = row.get(0);
+        println!("Pipeline Resolve Error: {}", error);
+    }
 
     Ok(())
 }
