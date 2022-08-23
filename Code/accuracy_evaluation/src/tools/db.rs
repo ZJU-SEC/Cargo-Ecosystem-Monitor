@@ -1,5 +1,6 @@
 use std::collections::{HashSet, HashMap};
 use std::sync::{Arc, Mutex};
+use rand::distributions::{Distribution, Uniform};
 
 use postgres::{Client};
 
@@ -11,7 +12,6 @@ pub struct CrateInfo{
     pub version_id: i32,
     pub name: String,
     pub version_num: String,
-    pub dep: i32,
     pub status: String,
 }
 
@@ -38,7 +38,6 @@ pub fn find_unevaluated_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
                 version_id INT,
                 name VARCHAR,
                 version_num VARCHAR,
-                deps INT,
                 status VARCHAR
             )"#,
             &[],
@@ -57,9 +56,10 @@ pub fn find_unevaluated_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
                 WITH most_dep_version AS
                 (SELECT version_id, COUNT(crate_id) as deps FROM dependencies GROUP BY version_id)
                 INSERT INTO public.accuracy_evaluation_status 
-                SELECT crate_id, version_id, name, version_num, deps, 'unevaluated' as status
-                FROM most_dep_version INNER JOIN crate_newestversion
-                ON version_id = newest_version_id ORDER BY deps desc LIMIT {}", CRATES_NUM),
+                    SELECT crate_id, version_id, name, version_num, 'unevaluated' as status
+                    FROM most_dep_version INNER JOIN crate_newestversion
+                    ON version_id = newest_version_id WHERE yanked = false ORDER BY deps desc LIMIT {}",
+                 CRATES_NUM),
                 &[],
             ).unwrap().first();
     }
@@ -73,11 +73,169 @@ pub fn find_unevaluated_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
             version_id: ver.get(1),
             name: ver.get(2),
             version_num: ver.get(3),
-            dep: ver.get(4),
-            status: ver.get(5),
+            status: ver.get(4),
         }
     ).collect()
 }
+
+
+pub fn find_unevaluated_crates_rand(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
+    conn.lock()
+        .unwrap()
+        .query(
+            r#"CREATE TABLE IF NOT EXISTS public.accuracy_evaluation_status
+            (
+                crate_id INT,
+                version_id INT,
+                name VARCHAR,
+                version_num VARCHAR,
+                status VARCHAR
+            )"#,
+            &[],
+        )
+        .unwrap();
+    
+
+    // Check if table is empty
+    if conn.lock().unwrap().query(
+            "SELECT * FROM accuracy_evaluation_status LIMIT 1",
+            &[],
+        ).unwrap().first().is_none()
+    {
+        println!("Start to build accuracy evaluation random test dataset");
+        // Empty: Select Random Crates to build table
+        conn.lock()
+            .unwrap()
+            .query(
+                r#"DROP TABLE IF EXISTS public.tmp_accuracy_evaluation_rand"#,
+                &[],
+            )
+            .unwrap();
+        conn.lock()
+            .unwrap()
+            .query(
+                r#"CREATE TABLE public.tmp_accuracy_evaluation_rand
+                (
+                    crate_id INT
+                )"#,
+                &[],
+            )
+            .unwrap();
+
+        // Find max crate id
+        let max_crate_id:i32 = conn.lock().unwrap()
+            .query("
+                SELECT MAX(crate_id) FROM crate_newestversion WHERE yanked=false",
+                &[],
+            ).unwrap().first().unwrap().get(0);
+        let mut rng = rand::thread_rng();
+        let rand_uniform = Uniform::from(1..(max_crate_id+1));
+        let mut size = 0;
+        let mut selected_crate = HashSet::new();
+        loop {
+            let rand_crate_id = rand_uniform.sample(&mut rng);
+            // Crate exists and not yanked.
+            if conn.lock().unwrap()
+                .query(&format!(
+                    "SELECT * FROM crate_newestversion WHERE yanked=false AND crate_id = {}"
+                    , rand_crate_id),
+                    &[],
+                ).unwrap().first().is_none(){
+                continue;
+            }
+            // Not selected.
+            if selected_crate.contains(&rand_crate_id){
+                continue;
+            }
+            // Then select this.
+            conn.lock().unwrap()
+                .query(&format!(
+                    "INSERT INTO tmp_accuracy_evaluation_rand VALUES ({})"
+                    , rand_crate_id),
+                    &[],
+                ).unwrap();
+            selected_crate.insert(rand_crate_id);
+            size += 1;
+            if size == CRATES_NUM {
+                break;
+            }
+        }
+
+        // Build Table
+        conn.lock().unwrap()
+            .query(
+                "INSERT INTO public.accuracy_evaluation_status
+                    SELECT tmp_accuracy_evaluation_rand.crate_id, newest_version_id as version_id, name, version_num, 'unevaluated' as status
+                    FROM tmp_accuracy_evaluation_rand INNER JOIN crate_newestversion
+                    ON tmp_accuracy_evaluation_rand.crate_id = crate_newestversion.crate_id",
+                &[],
+            ).unwrap();
+    }
+    
+    // Get unevaluated crates
+    let query = format!(
+        "SELECT * FROM accuracy_evaluation_status WHERE status = 'unevaluated'"
+    );
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
+    row.iter().map(|ver| 
+        CrateInfo{
+            crate_id:ver.get(0),
+            version_id: ver.get(1),
+            name: ver.get(2),
+            version_num: ver.get(3),
+            status: ver.get(4),
+        }
+    ).collect()
+}
+
+pub fn find_unevaluated_crates_hot(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
+    conn.lock()
+        .unwrap()
+        .query(
+            r#"CREATE TABLE IF NOT EXISTS public.accuracy_evaluation_status
+            (
+                crate_id INT,
+                version_id INT,
+                name VARCHAR,
+                version_num VARCHAR,
+                status VARCHAR
+            )"#,
+            &[],
+        )
+        .unwrap();
+    // Check if table is empty
+    if conn.lock().unwrap().query(
+            "SELECT * FROM accuracy_evaluation_status LIMIT 1",
+            &[],
+        ).unwrap().first().is_none()
+    {
+        // Empty: Select top crates with most direct dependency
+        conn.lock().unwrap()
+            .query(
+                &format!("
+                INSERT INTO public.accuracy_evaluation_status 
+                    SELECT crate_id, newest_version_id as version_id, crates.name, version_num, 'unevaluated' as status
+                    FROM crates INNER JOIN crate_newestversion
+                    ON id = crate_id WHERE yanked = false ORDER BY downloads desc LIMIT {}",
+                 CRATES_NUM),
+                &[],
+            ).unwrap().first();
+    }
+    let query = format!(
+        "SELECT * FROM accuracy_evaluation_status WHERE status = 'unevaluated'"
+    );
+    let row = conn.lock().unwrap().query(&query, &[]).unwrap();
+    row.iter().map(|ver| 
+        CrateInfo{
+            crate_id:ver.get(0),
+            version_id: ver.get(1),
+            name: ver.get(2),
+            version_num: ver.get(3),
+            status: ver.get(4),
+        }
+    ).collect()
+}
+
 
 pub fn find_resolved_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
     let query = format!(
@@ -90,8 +248,7 @@ pub fn find_resolved_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
                 version_id: ver.get(1),
                 name: ver.get(2),
                 version_num: ver.get(3),
-                dep: ver.get(4),
-                status: ver.get(5),
+                status: ver.get(4),
             }
         ).collect()
     }
@@ -124,4 +281,18 @@ pub fn get_pipeline_results(
         (*crate_name).insert(dep_ver);
     }
     dependencies
+}
+
+#[test]
+fn rnd_test(){
+    let max_crate_id = 100;
+    let mut rng = rand::thread_rng();
+    let rand_uniform = Uniform::from(1..(max_crate_id+1));
+    loop {
+        let rand_crate_id = rand_uniform.sample(&mut rng);
+        println!("rand_crate_id: {}", rand_crate_id);
+        if rand_crate_id == 100{
+            break;
+        }
+    }
 }
