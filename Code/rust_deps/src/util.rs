@@ -393,7 +393,36 @@ fn prebuild_db_table(conn: Arc<Mutex<Client>>){
     conn.lock().unwrap().query(r#"CREATE VIEW versions_with_name as (
         SELECT versions.*, crates.name FROM versions INNER JOIN crates ON versions.crate_id = crates.id
         )"#, &[]).unwrap_or_default();
-    
+    // Crate resolution process
+    conn.lock()
+        .unwrap()
+        .query(
+            r#"CREATE TABLE IF NOT EXISTS public.deps_process_status
+            (
+                version_id INT,
+                status VARCHAR
+            )"#,
+            &[],
+        )
+        .unwrap();
+    // Check if table is empty
+    if conn.lock().unwrap().query(
+            "SELECT * FROM deps_process_status LIMIT 1",
+            &[],
+        ).unwrap().first().is_none()
+    {
+        conn.lock().unwrap()
+            .query("
+                WITH ver_dep AS
+                        (SELECT DISTINCT version_id as ver FROM dependencies WHERE kind != 2)
+                INSERT INTO public.deps_process_status 
+                    SELECT ver, 'undone' FROM ver_dep
+                    WHERE ver NOT IN (SELECT id FROM versions WHERE yanked = true)
+                    AND ver NOT IN (SELECT DISTINCT ver FROM dep_errors)
+                    AND ver NOT IN (SELECT DISTINCT version_from FROM dep_version)",
+                &[],
+            ).unwrap();
+    }
 }
 
 /// Get a name by crate id.
