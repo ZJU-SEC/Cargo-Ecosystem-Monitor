@@ -25,7 +25,7 @@ struct VersionInfo {
     num: String,
 }
 
-const THREAD_DATA_SIZE: i64 = 500;
+const THREAD_DATA_SIZE: i64 = 20;
 const RERESOLVE_DATA_SIZE: i64 = 20;
 
 
@@ -33,6 +33,15 @@ const RERESOLVE_DATA_SIZE: i64 = 20;
 /// Run dependency resolving in `workers` threads
 /// Only process crates whose status = `status`
 pub fn run_deps(workers: usize, status: &str) {
+    if status == "processing"{
+        panic!("If you specify undone, it will automatically 
+        process crates whose status is 'processing'")
+    }
+    if status != "undone" &&
+       status != "fail"{
+        panic!("The status can only be undone/fail")
+    }
+
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -40,8 +49,10 @@ pub fn run_deps(workers: usize, status: &str) {
         )
         .unwrap(),
     ));
+    println!("DB Prebuild");
     prebuild_db_table(Arc::clone(&conn));
 
+    println!("Creating Channel");
     // Create channel
     let (tx, rx) = channel::bounded(workers);
 
@@ -93,6 +104,12 @@ pub fn run_deps(workers: usize, status: &str) {
                     .is_err()
                     {
                         error!("Thread {}: Panic occurs, version - {}", i, v.version_id);
+                        store_resolve_error(
+                            Arc::clone(&conn),
+                            v.version_id,
+                            true,
+                            "".to_string(),
+                        );
                     }
                     panic::set_hook(old_hook); // Must after catch_unwind
                 }
@@ -117,7 +134,7 @@ pub fn run_deps(workers: usize, status: &str) {
         } else {
             let query = format!(
                 r#"UPDATE deps_process_status SET status='processing' WHERE version_id IN (
-                    SELECT version_id FROM process_status WHERE status='{}' ORDER BY version_id asc LIMIT {}
+                    SELECT version_id FROM deps_process_status WHERE status='{}' ORDER BY version_id asc LIMIT {}
                 )"#,
                 status, THREAD_DATA_SIZE
             );
@@ -218,6 +235,13 @@ fn resolve(thread_id: u32, conn: Arc<Mutex<Client>>, version_info: &VersionInfo)
 
     let status = if res.is_ok() { "done" } else { "fail" };
 
+    update_process_status(Arc::clone(&conn), version_id, status);
+
+    res
+}
+
+fn update_process_status(conn: Arc<Mutex<Client>>, version_id: i32, status: &str){
+    warn!("update status");
     conn.lock()
         .unwrap()
         .query(
@@ -228,8 +252,6 @@ fn resolve(thread_id: u32, conn: Arc<Mutex<Client>>, version_info: &VersionInfo)
             &[],
         )
         .expect("Update process status fails");
-
-    res
 }
 
 /// Resolve version's dependencies and store them into db.
@@ -423,6 +445,14 @@ fn prebuild_db_table(conn: Arc<Mutex<Client>>){
                 &[],
             ).unwrap();
     }
+    else{
+        let query = format!(
+            r#"UPDATE deps_process_status SET status='undone' WHERE version_id IN (
+                SELECT version_id FROM deps_process_status WHERE status='processing'
+            )"#
+        );
+        conn.lock().unwrap().query(&query, &[]).unwrap();
+    }
 }
 
 /// Get a name by crate id.
@@ -592,6 +622,7 @@ fn store_resolve_error(conn: Arc<Mutex<Client>>, version: i32, is_panic: bool, m
         version, is_panic, message
     };
     conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
+    update_process_status(Arc::clone(&conn), version, "fail");
 }
 
 
