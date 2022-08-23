@@ -1,6 +1,6 @@
 use cargo::core::registry::PackageRegistry;
-use cargo::core::resolver::{CliFeatures, HasDevUnits, ResolveOpts, };
-use cargo::core::{Shell, Workspace, PackageIdSpec, Summary};
+use cargo::core::resolver::{CliFeatures, HasDevUnits, ResolveOpts};
+use cargo::core::{PackageIdSpec, Shell, Summary, Workspace};
 use cargo::ops;
 use cargo::util::Config;
 
@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::env::{self, current_dir};
 use std::fs::File;
 use std::io::{self, Write};
-use std::panic::{catch_unwind, self};
+use std::panic::{self, catch_unwind};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,18 +18,15 @@ use crossbeam::channel::{self};
 use log::{error, info, warn};
 use postgres::{Client, NoTls};
 
-struct version_info {
-    version_id:i32,
+struct VersionInfo {
+    version_id: i32,
     crate_id: i32,
     name: String,
     num: String,
 }
 
-
-const THREAD_DATA_SIZE:i64 = 100;
-const RERESOLVE_DATA_SIZE:i64 = 20;
-
-
+const THREAD_DATA_SIZE: i64 = 500;
+const RERESOLVE_DATA_SIZE: i64 = 20;
 
 /// Get a name by crate id.
 ///
@@ -68,26 +65,31 @@ fn get_name_by_version_id(conn: Arc<Mutex<Client>>, version_id: i32) -> Result<S
 }
 
 fn get_features_by_version_id(conn: Arc<Mutex<Client>>, version_id: i32) -> Result<Vec<String>> {
-    let mut features:HashSet<String> = HashSet::new();
+    let mut features: HashSet<String> = HashSet::new();
 
     // Get User-defined Features
-    let query = format!("SELECT features FROM versions WHERE id = {} LIMIT 1", version_id);
+    let query = format!(
+        "SELECT features FROM versions WHERE id = {} LIMIT 1",
+        version_id
+    );
     let row = conn.lock().unwrap().query(&query, &[]).unwrap();
-    let results:serde_json::Value = row.first()
-                    .with_context(|| {
-                        format!(
-                            "Get version string by version id fails, version id: {}",
-                            version_id
-                        )
-                    })?.get(0);
-    if let Some(vec_results) = results.as_object(){
+    let results: serde_json::Value = row
+        .first()
+        .with_context(|| {
+            format!(
+                "Get version string by version id fails, version id: {}",
+                version_id
+            )
+        })?
+        .get(0);
+    if let Some(vec_results) = results.as_object() {
         for (feature, _) in vec_results {
             features.insert(feature.clone());
-        } 
+        }
     }
 
     // Get optional dependency feature
-    // let query = format!("SELECT name FROM dependencies INNER JOIN crates ON crates.id=crate_id 
+    // let query = format!("SELECT name FROM dependencies INNER JOIN crates ON crates.id=crate_id
     //                     WHERE dependencies.version_id = {} AND optional = true"
     //                     , version_id);
     // let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
@@ -97,22 +99,28 @@ fn get_features_by_version_id(conn: Arc<Mutex<Client>>, version_id: i32) -> Resu
     Ok(features.into_iter().collect::<Vec<_>>())
 }
 
-fn get_features_from_serde_json(conn: Arc<Mutex<Client>>, version_id: i32, results: serde_json::Value) -> Vec<String> {
-    let mut features:HashSet<String> = HashSet::new();
+fn get_features_from_serde_json(
+    conn: Arc<Mutex<Client>>,
+    version_id: i32,
+    results: serde_json::Value,
+) -> Vec<String> {
+    let mut features: HashSet<String> = HashSet::new();
 
     // Get User-defined Features
-    if let Some(vec_results) = results.as_object(){
+    if let Some(vec_results) = results.as_object() {
         for (feature, _) in vec_results {
             features.insert(feature.clone());
-        } 
+        }
     }
 
     // Get optional dependency feature
-    let query = format!("SELECT name FROM dependencies INNER JOIN crates ON crates.id=crate_id 
-                        WHERE dependencies.version_id = {} AND optional = true"
-                        , version_id);
+    let query = format!(
+        "SELECT name FROM dependencies INNER JOIN crates ON crates.id=crate_id 
+                        WHERE dependencies.version_id = {} AND optional = true",
+        version_id
+    );
     let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
-    for optional_dep_name in rows{
+    for optional_dep_name in rows {
         features.insert(optional_dep_name.get(0));
     }
     features.into_iter().collect::<Vec<_>>()
@@ -180,7 +188,7 @@ fn get_version_by_name_version(conn: Arc<Mutex<Client>>, name: &str, version: &s
 /// ```
 /// store_resolve_error(conn, 362968, false, String::new("Error"));
 /// ```
-fn store_resolve_error(conn: Arc<Mutex<Client>>, version: i32, is_panic:bool, message: String){
+fn store_resolve_error(conn: Arc<Mutex<Client>>, version: i32, is_panic: bool, message: String) {
     let message = message.replace("'", "''");
     let query = format! {
         "INSERT INTO dep_errors(ver, is_panic, error) VALUES ({}, {:?}, '{}');",
@@ -189,31 +197,51 @@ fn store_resolve_error(conn: Arc<Mutex<Client>>, version: i32, is_panic:bool, me
     conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
 }
 
+/// Wrapper of [`resolve_store_deps_of_version`]
+fn resolve(thread_id: u32, conn: Arc<Mutex<Client>>, version_info: &VersionInfo) -> Result<()> {
+    let version_id = version_info.version_id;
+    let res = resolve_store_deps_of_version(thread_id, Arc::clone(&conn), version_info);
+
+    let status = if res.is_ok() { "done" } else { "fail" };
+
+    conn.lock()
+        .unwrap()
+        .query(
+            &format!(
+                "UPDATE process_status SET status = '{}' WHERE version_id = '{}';",
+                status, version_id
+            ),
+            &[],
+        )
+        .expect("Update process status fails");
+
+    res
+}
+
 /// Resolve version's dependencies and store them into db.
 fn resolve_store_deps_of_version(
     thread_id: u32,
     conn: Arc<Mutex<Client>>,
-    version_info: &version_info,
+    version_info: &VersionInfo,
 ) -> Result<()> {
     let version_id = version_info.version_id;
     let name = &version_info.name;
     let num = &version_info.num;
     let mut features = Vec::new();
 
-
     // Create virtual env by creating toml file
     // Fill toml contents
     let current_path = current_dir()?;
     let dep_filename = format!("dep{}.toml", thread_id);
     let current_toml_path = format!("{}/{}", current_path.display(), dep_filename);
-    
+
     // Create toml file
     let file = format_virt_toml_file(&name, &num, &features);
     File::create(&current_toml_path)?
         .write_all(file.as_bytes())
         .expect("Write failed");
 
-    // 1. Pre Resolve: To find all features of given crate 
+    // 1. Pre Resolve: To find all features of given crate
     // Create virtual env by setting correct workspace
     let config = Config::new(
         Shell::new(),
@@ -232,14 +260,13 @@ fn resolve_store_deps_of_version(
         &[],
         true,
     )?;
-    
-    // Find all `features` including user-defined and optional dependency 
-    if let Ok(res) = resolve.query(&format!("{}:{}", name, num)){
-        for feature in resolve.summary(res).features().keys(){
+
+    // Find all `features` including user-defined and optional dependency
+    if let Ok(res) = resolve.query(&format!("{}:{}", name, num)) {
+        for feature in resolve.summary(res).features().keys() {
             features.push(feature.as_str());
         }
-    }
-    else{
+    } else {
         warn!("Resolve version {} fails to find any features.", version_id);
     }
     // println!("All Features: {:?}", features);
@@ -269,8 +296,8 @@ fn resolve_store_deps_of_version(
         &[],
         // &[PackageIdSpec::parse("dep").unwrap()],
         true,
-    ).unwrap();
-
+    )
+    .unwrap();
 
     // 3. Start Formatting Resolve and store into DB
     let mut map = HashMap::new();
@@ -311,23 +338,21 @@ fn resolve_store_deps_of_version(
     }
 
     // Store dep info into DB.
-    if ! set.is_empty(){
+    if !set.is_empty() {
         let mut query = String::from("INSERT INTO dep_version VALUES");
         for (version_to, level) in set {
-            query.push_str(&format!(
-                "({}, {}, {}),",
-                version_id, version_to, level,
-            ));
+            query.push_str(&format!("({}, {}, {}),", version_id, version_to, level,));
         }
         query.pop();
         query.push(';');
         conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
     }
+
     Ok(())
 }
 
 /// Run dependency resolving in `workers` threads
-pub fn run_deps(workers: usize) {
+pub fn run_deps(workers: usize, status: &str) {
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -359,37 +384,9 @@ pub fn run_deps(workers: usize) {
             &[],
         )
         .unwrap_or_default();
-
-    // Decide start point
-    let mut offset = 0i64;//84472;offset168000,176000;191000;241872
-    let res = conn
-        .lock()
-        .unwrap()
-        .query(
-            "SELECT version_from FROM dep_version ORDER BY version_from desc LIMIT 1",
-            &[],
-        )
-        .unwrap();
-
-    if let Some(last) = res.first() {
-        let last: i32 = last.get(0);
-        let query = format!(
-            "with max_crate as (SELECT MAX(crate_id) 
-            FROM dep_version INNER JOIN versions on dep_version.version_from=versions.id) 
-            SELECT COUNT(versions) FROM versions WHERE versions.crate_id<ANY(SELECT max FROM max_crate)"
-        );
-
-        offset = conn
-            .lock()
-            .unwrap()
-            .query(&query, &[])
-            .unwrap()
-            .first()
-            .unwrap()
-            .get(0);
-    }
-    offset += 1;
-    info!("Starting offset: {}", offset);
+    conn.lock().unwrap().query(r#"CREATE VIEW versions_with_name as (
+        SELECT versions.*, crates.name FROM versions INNER JOIN crates ON versions.crate_id = crates.id
+        )"#, &[]).unwrap_or_default();
 
     // Create channel
     let (tx, rx) = channel::bounded(workers);
@@ -403,25 +400,38 @@ pub fn run_deps(workers: usize) {
         handles.push(thread::spawn(move || {
             while let Ok(versions) = rx.recv() {
                 for v in versions {
-                    let v = v as version_info;
+                    let v = v as VersionInfo;
                     // Set panic hook and store into DB
                     let old_hook = panic::take_hook();
                     panic::set_hook({
                         let conn_copy = conn.clone();
                         Box::new(move |info| {
-                            let err_message = format!("{:?}",info);
-                            error!("Thread {}: Panic occurs, version - {}, info:{}", i, v.version_id, err_message);
-                            store_resolve_error(Arc::clone(&conn_copy),
-                                    v.version_id, true, err_message);
+                            let err_message = format!("{:?}", info);
+                            error!(
+                                "Thread {}: Panic occurs, version - {}, info:{}",
+                                i, v.version_id, err_message
+                            );
+                            store_resolve_error(
+                                Arc::clone(&conn_copy),
+                                v.version_id,
+                                true,
+                                err_message,
+                            );
                         })
                     });
                     if catch_unwind(|| {
                         //  MAIN OPERATION: Dependency Resolution
-                        if let Err(e) =
-                            resolve_store_deps_of_version(i as u32, Arc::clone(&conn), &v)
-                        {
-                            warn!("Resolve version {} fails, due to error: {}", v.version_id, e);
-                            store_resolve_error(Arc::clone(&conn), v.version_id, false, format!("{:?}",e));
+                        if let Err(e) = resolve(i as u32, Arc::clone(&conn), &v) {
+                            warn!(
+                                "Resolve version {} fails, due to error: {}",
+                                v.version_id, e
+                            );
+                            store_resolve_error(
+                                Arc::clone(&conn),
+                                v.version_id,
+                                false,
+                                format!("{:?}", e),
+                            );
                         } else {
                             info!("Thread {}: Done version - {}", i, v.version_id);
                         }
@@ -440,56 +450,72 @@ pub fn run_deps(workers: usize) {
     loop {
         let conn = Arc::clone(&conn);
         let query = format!(
-            "WITH ver_feature AS
-            (SELECT id as version_id, crate_id, num FROM versions ORDER BY crate_id asc LIMIT {} OFFSET {})
-            SELECT version_id, crate_id, name, num FROM crates INNER JOIN ver_feature ON crate_id=id",
-            THREAD_DATA_SIZE, offset
+            r#"SELECT id,crate_id,name,num FROM versions_with_name WHERE id in (
+                SELECT version_id FROM deps_process_status WHERE status='{}' ORDER BY version_id asc LIMIT {}
+                )"#,
+            status, THREAD_DATA_SIZE
         );
+
         let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
 
         if rows.is_empty() {
             break;
         } else {
-            warn!("OFFSET = {}", offset);
-            let v: Vec<version_info> = rows.iter().map(|info| 
-                version_info{
-                    version_id: info.get(0),
-                    crate_id: info.get(1),
-                    name: info.get(2),
-                    num: info.get(3), 
-                } ).collect();
-            tx.send(v).expect("Send task error!");
-        }
-        offset += THREAD_DATA_SIZE;
+            let query = format!(
+                r#"UPDATE deps_process_status SET status='processing' WHERE version_id IN (
+                    SELECT version_id FROM process_status WHERE status='{}' ORDER BY version_id asc LIMIT {}
+                )"#,
+                status, THREAD_DATA_SIZE
+            );
 
-        // let mut v:Vec<i32> = Vec::new();
-        // v.push(6);
-        // tx.send(v).expect("Send task error!");
-        // break;
+            conn.lock().unwrap().query(&query, &[]).unwrap();
+
+            let versions: Vec<VersionInfo> = rows
+                .iter()
+                .map(|row| VersionInfo {
+                    version_id: row.get(0),
+                    crate_id: row.get(1),
+                    name: row.get(2),
+                    num: row.get(3),
+                })
+                .collect();
+
+            tx.send(versions).unwrap();
+        }
     }
 
-    
+    /*
     // Re-resolve: Resolve all unresolved crates.
     warn!("Re-resolve start");
     // Build cache table of unresolved crates
-    conn.lock().unwrap().query(&format!(
-        "DROP TABLE IF EXISTS tmp_cached_ver_feature "
-    ), &[]).unwrap();
-    conn.lock().unwrap().query(&format!(
-        "CREATE TABLE tmp_cached_ver_feature AS (
+    conn.lock()
+        .unwrap()
+        .query(
+            &format!("DROP TABLE IF EXISTS tmp_cached_ver_feature "),
+            &[],
+        )
+        .unwrap();
+    conn.lock()
+        .unwrap()
+        .query(
+            &format!(
+                "CREATE TABLE tmp_cached_ver_feature AS (
         WITH ver_feature AS
-        (SELECT id as version_id, crate_id, num FROM versions WHERE id in 
+        (SELECT id as version_id, crate_id, num FROM versions WHERE id in
             (WITH ver_dep AS
                 (SELECT DISTINCT version_id as ver FROM dependencies WHERE kind != 2)
             SELECT ver FROM ver_dep
-            WHERE ver NOT IN (SELECT id FROM versions WHERE yanked = true) 
+            WHERE ver NOT IN (SELECT id FROM versions WHERE yanked = true)
             AND ver NOT IN (SELECT DISTINCT ver FROM dep_errors)
             AND ver NOT IN (SELECT DISTINCT version_from FROM dep_version))
         )
         SELECT version_id, crate_id, name, num FROM crates INNER JOIN ver_feature ON crate_id=id
         )
         "
-    ), &[]).unwrap();
+            ),
+            &[],
+        )
+        .unwrap();
     // Start sending data
     offset = 0;
     loop {
@@ -503,18 +529,21 @@ pub fn run_deps(workers: usize) {
         if rows.is_empty() {
             break;
         } else {
-            let v: Vec<version_info> = rows.iter().map(|info| 
-                version_info{
+            let v: Vec<VersionInfo> = rows
+                .iter()
+                .map(|info| VersionInfo {
                     version_id: info.get(0),
                     crate_id: info.get(1),
                     name: info.get(2),
-                    num: info.get(3), 
-                } ).collect();
+                    num: info.get(3),
+                })
+                .collect();
             tx.send(v).expect("Send task error!");
         }
         offset += RERESOLVE_DATA_SIZE;
         warn!("Resolve OFFSET = {}", offset);
     }
+    */
 
     std::mem::drop(tx);
     for handle in handles {
@@ -537,7 +566,10 @@ version = "0.1.0"
     file.push('\n');
 
     // Add all features
-    file.push_str(&format!("{} = {}version = \"={}\", features = [", name, "{", version_num));
+    file.push_str(&format!(
+        "{} = {}version = \"={}\", features = [",
+        name, "{", version_num
+    ));
     for feature in features {
         file.push_str(&format!("\"{}\",", feature));
     }
@@ -546,7 +578,7 @@ version = "0.1.0"
 }
 
 #[test]
-fn resolve_test() -> io::Result<()>{
+fn resolve_test() -> io::Result<()> {
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -560,7 +592,6 @@ fn resolve_test() -> io::Result<()>{
     let mut features = Vec::new();
     // let features:Vec<String> = Vec::new();
 
-
     // Create virtual env by creating toml file
     // Fill toml contents
     let current_path = current_dir()?;
@@ -573,8 +604,8 @@ fn resolve_test() -> io::Result<()>{
     File::create(&current_toml_path)?
         .write_all(file.as_bytes())
         .expect("Write failed");
-    
-    // Pre Resolve: To find all features of given crate 
+
+    // Pre Resolve: To find all features of given crate
     let config = Config::new(
         Shell::new(),
         env::current_dir()?,
@@ -595,20 +626,19 @@ fn resolve_test() -> io::Result<()>{
         &[],
         // &[PackageIdSpec::parse("dep").unwrap()],
         true,
-    ).unwrap();
+    )
+    .unwrap();
     // println!("{:#?}", resolve);
-    
-    // Find all `features` including user-defined and optional dependency 
-    if let Ok(res) = resolve.query(&format!("{}:{}", name, num)){
-        for feature in resolve.summary(res).features().keys(){
+
+    // Find all `features` including user-defined and optional dependency
+    if let Ok(res) = resolve.query(&format!("{}:{}", name, num)) {
+        for feature in resolve.summary(res).features().keys() {
             features.push(feature.as_str());
         }
-    }
-    else{
+    } else {
         println!("NO RES");
     }
     println!("All Features: {:?}", features);
-
 
     // Double resolve: This time resolve with features
     let file = format_virt_toml_file(&name, &num, &features);
@@ -634,13 +664,13 @@ fn resolve_test() -> io::Result<()>{
         &[],
         // &[PackageIdSpec::parse("dep").unwrap()],
         true,
-    ).unwrap();
+    )
+    .unwrap();
     println!("{:#?}", resolve);
 
     Ok(())
 
-    
-    // // User defined feature 
+    // // User defined feature
     // let user_features = resolve.features(res);
     // for user_feature in user_features {
     //     features.insert(user_feature.as_str());
@@ -654,7 +684,6 @@ fn resolve_test() -> io::Result<()>{
     //         }
     //     }
     // }
-
 
     // let mut map = HashMap::new();
     // let mut set = HashSet::new();

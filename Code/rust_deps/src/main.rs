@@ -30,5 +30,6 @@ fn main() {
     ])
     .unwrap();
 
-    run_deps(20)
+    run_deps(1, "undone");
+    run_deps(1, "fail")
 }
