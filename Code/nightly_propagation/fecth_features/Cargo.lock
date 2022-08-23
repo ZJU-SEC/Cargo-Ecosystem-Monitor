@@ -253,7 +253,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fecth_crate"
+name = "fecth_feature"
 version = "0.1.0"
 dependencies = [
  "anyhow",
