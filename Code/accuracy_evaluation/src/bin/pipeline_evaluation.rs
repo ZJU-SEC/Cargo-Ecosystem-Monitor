@@ -19,7 +19,7 @@ use accuracy_evaluation::tools::db::*;
 use accuracy_evaluation::tools::helper::*;
 
 
-const THREADNUM:usize = 2; // Thread number
+const THREADNUM:usize = 20; // Thread number
 
 fn main() {
     // Prepare log file
