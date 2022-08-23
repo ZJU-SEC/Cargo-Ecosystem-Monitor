@@ -246,7 +246,7 @@ fn update_process_status(conn: Arc<Mutex<Client>>, version_id: i32, status: &str
         .unwrap()
         .query(
             &format!(
-                "UPDATE process_status SET status = '{}' WHERE version_id = '{}';",
+                "UPDATE deps_process_status SET status = '{}' WHERE version_id = '{}';",
                 status, version_id
             ),
             &[],
