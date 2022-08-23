@@ -223,6 +223,16 @@ SELECT crate_id, num, categories, indir_dep FROM hot_advisory_ver INNER JOIN ver
 ON id= version_id)
 SELECT name, num as version_num, categories, indir_dep 
 FROM hot_advisory_crate_ver INNER JOIN crates ON id = crate_id ORDER BY indir_dep desc
+-- Hot crate impacted by advisory (Select top version as version, no category)
+WITH hot_advisory_crate_ver AS
+    (WITH hot_advisory_ver AS
+        (SELECT version_id, categories, COUNT(DISTINCT version_from) as indir_dep FROM advisory INNER JOIN dep_version
+        ON version_id = version_to GROUP BY version_id, categories )
+    SELECT crate_id, num, categories, indir_dep FROM hot_advisory_ver INNER JOIN versions 
+    ON id= version_id)
+SELECT name, MAX(indir_dep) as indir_dep
+FROM hot_advisory_crate_ver INNER JOIN crates ON id = crate_id 
+GROUP BY name, ORDER BY indir_dep desc
 
 -- "=version" Propagation (rough)
 SELECT COUNT(DISTINCT version_from) FROM dep_version WHERE version_to IN
@@ -239,8 +249,12 @@ SELECT max_dep, COUNT(max_dep) FROM max_depth_version GROUP BY max_dep ORDER BY 
 
 -- Evaluation
 -- 1. Find crates with most indirect dependencies 
-SELECT version_from, COUNT( DISTINCT version_to) as indir_dep FROM dep_version 
-GROUP BY version_from ORDER BY indir_dep desc
+WITH most_dep_version AS
+    (SELECT version_id, COUNT(crate_id) as deps FROM dependencies GROUP BY version_id)
+INSERT INTO public.accuracy_evaluation_status 
+    SELECT crate_id, version_id, name, version_num, deps, 'unevaluated' as status
+    FROM most_dep_version INNER JOIN crate_newestversion
+    ON version_id = newest_version_id WHERE yanked = false ORDER BY deps desc LIMIT {}
 -- 2. Get their indirect dependency
 WITH target_dep AS(
 WITH target_version AS 

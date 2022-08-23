@@ -15,7 +15,7 @@ CREATE TABLE crate_newestversion AS
 (
 WITH crate_newest_version AS
     (WITH newest_version AS
-        (SELECT crate_id, MAX(updated_at) as updated_at FROM versions GROUP BY crate_id ORDER BY crate_id asc)
-	SELECT newest_version.crate_id, id as newest_version_id, num as version_num FROM versions INNER JOIN newest_version
-	ON versions.crate_id = newest_version.crate_id AND versions.updated_at = newest_version.updated_at ORDER BY crate_id asc)
-SELECT crate_id, newest_version_id, name, version_num FROM crate_newest_version INNER JOIN crates ON crate_id = id);
+        (SELECT crate_id, MAX(created_at) as created_at FROM versions GROUP BY crate_id ORDER BY crate_id asc)
+	SELECT newest_version.crate_id, id as newest_version_id, num as version_num, yanked FROM versions INNER JOIN newest_version
+	ON versions.crate_id = newest_version.crate_id AND versions.created_at = newest_version.created_at ORDER BY crate_id asc)
+SELECT crate_id, newest_version_id, name, version_num, yanked FROM crate_newest_version INNER JOIN crates ON crate_id = id);

@@ -9,12 +9,18 @@ SELECT COUNT(versions) FROM versions WHERE versions.crate_id<ANY(SELECT max FROM
 
 -- Find current unresolved crate versions (Takes long time)
 -- Dependencies(Without dev-dep) - yanked - dep_errors - dep_version
-WITH ver_dep AS
-(SELECT DISTINCT version_id as ver FROM dependencies WHERE kind != 2)
-SELECT ver FROM ver_dep
-WHERE ver NOT IN (SELECT id FROM versions WHERE yanked = true) 
-AND ver NOT IN (SELECT DISTINCT ver FROM dep_errors)
-AND ver NOT IN (SELECT DISTINCT version_from FROM dep_version)
+WITH ver_feature AS
+    (SELECT id as version_id, crate_id, num FROM versions WHERE id in 
+        (WITH ver_dep AS
+            (SELECT DISTINCT version_id as ver FROM dependencies WHERE kind != 2)
+        SELECT ver FROM ver_dep
+        WHERE ver NOT IN (SELECT id FROM versions WHERE yanked = true) 
+        AND ver NOT IN (SELECT DISTINCT ver FROM dep_errors)
+        AND ver NOT IN (SELECT DISTINCT version_from FROM dep_version))
+    )
+SELECT version_id, crate_id, name, num FROM crates INNER JOIN ver_feature ON crate_id=id
+-- Build this table
+CREATE TABLE tmp_cached_ver_feature AS (...)
 
 
 -- Indirect Current resolved Crates_from counts
@@ -38,7 +44,9 @@ SELECT crate_id FROM versions WHERE crate_id NOT IN
 (SELECT DISTINCT crate_id FROM versions WHERE yanked = false);
 
 -- Export DATABASE 
-copy dep_version to 'version_dep.csv' WITH CSV DELIMITER ',';
+copy dep_version to 'path/to/version_dep_20xxxxxx.csv' WITH CSV DELIMITER ',';
+-- Import from csv
+COPY dep_version(version_from, version_to, dep_level) FROM 'path/to/version_dep_20xxxxxx.csv' DELIMITER ',' CSV HEADER;
 
 
 -- Hot Keywords by Crates
