@@ -22,6 +22,13 @@ fn main() -> std::io::Result<()> {
     let mut right_dep               = 0;
     let mut wrong_dep               = 0;
     let mut missing_dep             = 0;
+    // Full Accuracy
+    let mut crate_count             = 0;
+    let mut match_count             = 0;
+    // Results detail table
+    let mut accuracy_alarm:Vec<String> = Vec::new();
+    let mut pipeline_failure:Vec<String> = Vec::new();
+    let mut pipeline_total_overresolve:Vec<String> = Vec::new();
     // Read every results
     let paths = fs::read_dir(RESULTSDIR).unwrap();
     for path_dir in paths {
@@ -49,17 +56,32 @@ fn main() -> std::io::Result<()> {
         let right_dep_single            = &cap_right_dep            [0].replace("right_dep = ", "").parse::<i32>().unwrap();
         let wrong_dep_single            = &cap_wrong_dep            [0].replace("wrong_dep = ", "").parse::<i32>().unwrap();
         let missing_dep_single          = &cap_missing_dep          [0].replace("missing_dep = ", "").parse::<i32>().unwrap();
+
+
         // Alarm
         if *cargotree_crates_num_single == 0 {
-            println!("Cargo tree resolve failure Alarm: {}", display);
+            if *pipeline_crates_num_single != 0 {
+                // Pipiline over-resolve:
+                //      This is caused by local path in toml file, we skip the evaluation of this.
+                //      Now, we can't handle this. But this is the problem from benchmark, not our resolution pipeline.
+                pipeline_total_overresolve.push(display.to_string());
+                continue;
+            }
         }
         else if  *pipeline_crates_num_single == 0 {
-            println!("Pipeline resolve failure Alarm: {}", display);
-            continue;
+            pipeline_failure.push(display.to_string());
         }
-        else if (right_dep_single * 100) < (ACCURACY_BASE * cargotree_crates_num_single) {
-            println!("Accuracy Alarm: {}", display);
+        else if (right_dep_single * 100) <= (ACCURACY_BASE * cargotree_crates_num_single) {
+            accuracy_alarm.push(display.to_string());
         }
+
+        
+        crate_count += 1;
+        if (pipeline_crates_num_single == cargotree_crates_num_single)
+            && (pipeline_crates_num_single == right_dep_single){
+            match_count += 1;
+        }
+        
         cargotree_crates_num    += cargotree_crates_num_single;
         pipeline_crates_num     += pipeline_crates_num_single ;
         overresolve_dep         += overresolve_dep_single     ;
@@ -67,6 +89,12 @@ fn main() -> std::io::Result<()> {
         wrong_dep               += wrong_dep_single           ;
         missing_dep             += missing_dep_single         ;
     }
+    println!("pipeline_total_overresolve : {:#?}", pipeline_total_overresolve);
+    println!("pipeline_failure : {:#?}", pipeline_failure);
+    println!("accuracy_alarm : {:#?}", accuracy_alarm);
+
+    println!("crate_count          = {}", crate_count );
+    println!("match_count          = {}", match_count );
     println!("cargotree_crates_num = {}", cargotree_crates_num );
     println!("pipeline_crates_num  = {}", pipeline_crates_num  );
     println!("overresolve_dep      = {}", overresolve_dep      );
