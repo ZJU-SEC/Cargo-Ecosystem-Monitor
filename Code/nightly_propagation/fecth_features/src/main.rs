@@ -34,6 +34,6 @@ fn main() {
     ])
     .unwrap();
 
-    run(8, "incomplete")
+    run(2, "undone")
     // run_imcomplete("undone")
 }
