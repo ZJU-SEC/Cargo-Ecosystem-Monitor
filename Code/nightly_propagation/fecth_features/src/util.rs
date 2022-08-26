@@ -17,6 +17,7 @@ use postgres::{Client, NoTls};
 use regex::Regex;
 use tar::Archive;
 use toml::Value;
+use walkdir::WalkDir;
 
 const THREAD_LOAD: i32 = 20;
 
@@ -92,7 +93,14 @@ pub fn run(workers: usize, todo_status: &str) {
                     .expect("Fatal Error, build downloader fails!");
 
                 while let Ok(version_info) = rx.recv() {
-                    extract_info(Arc::clone(&conn), &mut downloader, version_info, &home);
+                    create_dir(&home).unwrap_or_default();
+
+                    extract_info(
+                        Arc::clone(&conn),
+                        Some(&mut downloader),
+                        version_info,
+                        &home,
+                    );
 
                     remove_dir_all(&home).unwrap_or_default();
                 }
@@ -156,16 +164,131 @@ pub fn run(workers: usize, todo_status: &str) {
     println!(r#"\\\ Done! ///"#)
 }
 
+#[allow(unused)]
+pub fn run_offline(workers: usize, todo_status: &str, home: &str) {
+    let conn = Arc::new(Mutex::new(
+        Client::connect(
+            "host=localhost dbname=crates_08_22 user=postgres password=postgres",
+            NoTls,
+        )
+        .unwrap(),
+    ));
+
+    println!("DB Prebuild");
+    prebuild_db_table(Arc::clone(&conn));
+
+    let todo_count: i64 = conn
+        .lock()
+        .unwrap()
+        .query(
+            &format!(
+                "SELECT COUNT(version_id) FROM feature_process_status WHERE status = '{}'",
+                todo_status
+            ),
+            &[],
+        )
+        .unwrap()
+        .first()
+        .unwrap()
+        .get(0);
+
+    let mut mb = ProgressBar::new(todo_count as u64);
+    mb.format("╢▌▌░╟");
+    mb.set(0);
+
+    let (tx, rx) = channel::bounded(2 * workers);
+
+    let mut handles = vec![];
+    for i in 0..workers {
+        let rx = rx.clone();
+        let conn = Arc::clone(&conn);
+        let home = home.to_string();
+
+        // Start Fetching
+        handles.push(thread::spawn(move || {
+            let old_hook = panic::take_hook();
+            panic::set_hook({
+                Box::new(move |info| {
+                    error!("Thread {}: panic, {}", i, info);
+                })
+            });
+
+            catch_unwind(|| {
+                while let Ok(version_info) = rx.recv() {
+                    extract_info(Arc::clone(&conn), None, version_info, &home);
+                }
+            })
+            .unwrap_or_default();
+
+            panic::set_hook(old_hook);
+        }));
+    }
+
+    loop {
+        let conn = Arc::clone(&conn);
+        let query = format!(
+            r#"SELECT id,crate_id,name,num FROM versions_with_name WHERE id in (
+                SELECT version_id FROM feature_process_status WHERE status='{}' ORDER BY version_id asc LIMIT {}
+                )"#,
+            todo_status, THREAD_LOAD
+        );
+
+        let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
+
+        if rows.is_empty() {
+            break;
+        } else {
+            let query = format!(
+                "UPDATE feature_process_status SET status='processing' WHERE version_id IN (
+                    SELECT version_id FROM feature_process_status WHERE status='{}' ORDER BY version_id asc LIMIT {}
+                )",
+                todo_status, THREAD_LOAD
+            );
+
+            conn.lock().unwrap().query(&query, &[]).unwrap();
+
+            let versions: Vec<VersionInfo> = rows
+                .iter()
+                .map(|row| VersionInfo {
+                    version_id: row.get(0),
+                    _crate_id: row.get(1),
+                    name: row.get(2),
+                    num: row.get(3),
+                })
+                .collect();
+
+            mb.add(versions.len() as u64);
+
+            tx.send(versions).expect("Fatal Error, send message fails!");
+        }
+    }
+
+    std::mem::drop(tx);
+
+    mb.finish();
+
+    for handle in handles {
+        // Unsolved problem
+        if handle.join().is_err() {
+            error!("!!!Thread Crash!!!")
+        }
+    }
+
+    println!(r#"\\\ Done! ///"#)
+}
+
 fn extract_info(
     conn: Arc<Mutex<Client>>,
-    downloader: &mut Downloader,
+    downloader: Option<&mut Downloader>,
     versions: Vec<VersionInfo>,
     home: &str,
 ) {
-    create_dir(home).unwrap_or_default();
-
-    let success = fetch_version(Arc::clone(&conn), downloader, versions);
-    deal_version(Arc::clone(&conn), success, home);
+    if let Some(downloader) = downloader {
+        let success = fetch_version(Arc::clone(&conn), downloader, versions);
+        deal_version(Arc::clone(&conn), success, home, false);
+    } else {
+        deal_version(Arc::clone(&conn), versions, home, true);
+    };
 }
 
 fn fetch_version(
@@ -205,10 +328,15 @@ fn fetch_version(
     versions
 }
 
-fn deal_version(conn: Arc<Mutex<Client>>, mut versions: Vec<VersionInfo>, home: &str) {
+fn deal_version(
+    conn: Arc<Mutex<Client>>,
+    mut versions: Vec<VersionInfo>,
+    home: &str,
+    offline: bool,
+) {
     for (id, err) in versions
         .iter()
-        .map(|v| deal_one_version(Arc::clone(&conn), &v.name, &v.version_id, &v.num, home))
+        .map(|v| deal_one_version(Arc::clone(&conn), v, home, offline))
         .collect::<Vec<Result<(), Error>>>()
         .into_iter()
         .enumerate()
@@ -230,33 +358,44 @@ fn deal_version(conn: Arc<Mutex<Client>>, mut versions: Vec<VersionInfo>, home: 
 
 fn deal_one_version(
     conn: Arc<Mutex<Client>>,
-    name: &str,
-    version_id: &i32,
-    num: &str,
+    version: &VersionInfo,
     home: &str,
+    offline: bool,
 ) -> Result<(), Error> {
-    let data = File::open(&format!("{}/{}-{}.tgz", home, name, num))?;
-    let libfile = format!("{}/lib.rs", home);
-    let mut edition = String::from("2015");
-    let mut archive = Archive::new(GzDecoder::new(data));
     let mut features = vec![];
     let mut to_dos = vec![];
+    let mut edition = String::from("2015");
 
-    for file in &mut archive.entries()? {
-        let mut file = file?;
-        let file_name = file
-            .header()
-            .path()?
+    let dir = if !offline {
+        let data = File::open(&format!("{}/{}-{}.tgz", home, version.name, version.num))?;
+        let mut archive = Archive::new(GzDecoder::new(data));
+
+        archive.unpack(&format!("{}/{}-{}", home, version.name, version.num))?;
+        WalkDir::new(&format!("{}/{}-{}", home, version.name, version.num))
+    } else {
+        WalkDir::new(&format!(
+            "{}/{}/{}-{}",
+            home, version.name, version.name, version.num
+        ))
+    };
+
+    for entry in dir {
+        let entry = entry?;
+
+        if entry
+            .path()
             .file_name()
-            .expect("Fatal error, get file name fails")
-            .to_owned();
-
-        if file_name.eq_ignore_ascii_case("lib.rs") {
-            let mut buf = String::new();
-
-            file.read_to_string(&mut buf)?;
-            to_dos.push(buf);
-        } else if file_name.eq_ignore_ascii_case("Cargo.toml") {
+            .unwrap()
+            .eq_ignore_ascii_case("lib.rs")
+        {
+            to_dos.push(entry.path().to_owned());
+        } else if entry
+            .path()
+            .file_name()
+            .unwrap()
+            .eq_ignore_ascii_case("Cargo.toml")
+        {
+            let mut file = File::open(entry.path())?;
             let mut buf = String::new();
             file.read_to_string(&mut buf).unwrap();
 
@@ -273,14 +412,12 @@ fn deal_one_version(
         }
     }
 
-    for buf in &mut to_dos {
-        File::create(&libfile).unwrap().write_all(buf.as_bytes())?;
-
+    for librs in &mut to_dos {
         let exec = Command::new(RUSTC)
             .arg("--edition")
             .arg(&edition)
             .arg("--nft-analysis")
-            .arg(&libfile)
+            .arg(&librs)
             .output()?;
 
         if exec.status.success() {
@@ -301,13 +438,17 @@ fn deal_one_version(
             let out = String::from_utf8(exec.stderr).unwrap();
 
             if out.contains("rustc resolve feature fails") {
-                return Err(anyhow!("rustc analysis {} {} fails", name, num));
+                return Err(anyhow!(
+                    "rustc analysis {} {} fails",
+                    version.name,
+                    version.num
+                ));
             } else {
                 return Err(anyhow!(
                     "rustc other fails, detail:{}, version: {} {}",
                     out.lines().nth(0).unwrap(),
-                    name,
-                    num
+                    version.name,
+                    version.num
                 ));
             }
         }
@@ -318,14 +459,17 @@ fn deal_one_version(
     if features.is_empty() {
         query.push_str(&format!(
             "INSERT INTO version_feature (id) VALUES('{}');",
-            version_id
+            version.version_id
         ));
     } else {
         query.push_str("INSERT INTO version_feature VALUES");
         features
             .iter()
             .map(|(cond, feat)| {
-                query.push_str(&format!("('{}', '{}', '{}'),", version_id, cond, feat));
+                query.push_str(&format!(
+                    "('{}', '{}', '{}'),",
+                    version.version_id, cond, feat
+                ));
             })
             .count();
         query.pop();

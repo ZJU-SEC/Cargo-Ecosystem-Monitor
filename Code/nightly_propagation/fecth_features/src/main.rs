@@ -10,7 +10,7 @@ mod util;
 
 use simplelog::*;
 use std::fs::OpenOptions;
-use util::{run};
+use util::{run, run_offline};
 
 fn main() {
     CombinedLogger::init(vec![
@@ -34,6 +34,7 @@ fn main() {
     ])
     .unwrap();
 
-    run(2, "undone")
+    // run(1, "undone")
+    run_offline(1, "undone", "./on_process")
     // run_imcomplete("undone")
 }
