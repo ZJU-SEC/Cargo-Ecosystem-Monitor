@@ -316,6 +316,7 @@ fn fetch_version(
         .enumerate()
         .filter(|(_id, res)| res.is_err())
     {
+        // TODO: fix bug on id-shift
         let fail = versions.remove(id);
         store_fails_info(
             Arc::clone(&conn),
@@ -334,15 +335,14 @@ fn deal_version(
     home: &str,
     offline: bool,
 ) {
-    for (id, err) in versions
+    for (err, fail) in versions
         .iter()
         .map(|v| deal_one_version(Arc::clone(&conn), v, home, offline))
         .collect::<Vec<Result<(), Error>>>()
         .into_iter()
-        .enumerate()
-        .filter(|(_id, res)| res.is_err())
+        .zip(versions.iter())
+        .filter(|(res, _fail)| res.is_err())
     {
-        let fail = versions.remove(id);
         store_fails_info(
             Arc::clone(&conn),
             fail.version_id,
@@ -588,7 +588,7 @@ fn store_fails_info(conn: Arc<Mutex<Client>>, version_id: i32, name: &str, info:
         .unwrap()
         .query(
             &format!(
-                "INSERT INTO fails_info VALUES('{}', '{}', '{}');",
+                "INSERT INTO feature_errors VALUES('{}', '{}', '{}');",
                 version_id, name, info
             ),
             &[],
