@@ -19,3 +19,7 @@ WITH crate_newest_version AS
 	SELECT newest_version.crate_id, id as newest_version_id, num as version_num, yanked FROM versions INNER JOIN newest_version
 	ON versions.crate_id = newest_version.crate_id AND versions.created_at = newest_version.created_at ORDER BY crate_id asc)
 SELECT crate_id, newest_version_id, name, version_num, yanked FROM crate_newest_version INNER JOIN crates ON crate_id = id);
+
+-- Build View: Version and crate info for every version
+CREATE VIEW versions_with_name as (
+        SELECT versions.*, crates.name FROM versions INNER JOIN crates ON versions.crate_id = crates.id);
