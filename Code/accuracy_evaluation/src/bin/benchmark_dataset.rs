@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::process::Command;
 use std::io::prelude::*;
+use std::env;
 
 use simplelog::*;
 use anyhow::{ Result};
@@ -18,11 +19,12 @@ use regex::Regex;
 
 use accuracy_evaluation::tools::db::*;
 use accuracy_evaluation::tools::helper::*;
+use accuracy_evaluation::THREADNUM;
 
-const THREADNUM:usize = 20; // Thread number
-const CRATES_NUM:i64 = 1000; // Evaluated crate sample number
 
 fn main() {
+
+
     // Prepare log file
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -55,12 +57,23 @@ fn main() {
     create_dir(Path::new(CARGOTREE_DEPENDENCYDIR)).unwrap_or_default(); // Resolved dependency directory
     create_dir(Path::new(PIPELINE_DEPENDENCYDIR)).unwrap_or_default(); // Resolved dependency directory
     // Main Process
-    run();
+    
+    let args: Vec<String> = env::args().collect();
+    println!("{:?}", args);
+    if args.len() == 2{
+        let dataset = &args[1];
+        match dataset.as_str() {
+            "hot" => run("hot"),
+            "random" => run("random"),
+            "mostdir" => run("mostdir"),
+            _ => error!("No such dataset!"),
+        }
+    }
 }
 
 
 
-fn run(){
+fn run(dataset: &str){
     // Get all possible rustup targets
     // targets_thread Data Structure: Arc<RwLock<vec<target_str>>>
     // RwLock is used for sharing read-only data without lock among threads.
@@ -86,7 +99,12 @@ fn run(){
         )
         .unwrap(),
     ));
-    let unevaluated_crates = find_unevaluated_crates_hot(Arc::clone(&conn));
+    let unevaluated_crates = match dataset {
+        "hot" => find_unevaluated_crates_hot(Arc::clone(&conn)),
+        "random" => find_unevaluated_crates_rand(Arc::clone(&conn)),
+        "mostdir" => find_unevaluated_crates_mostdir(Arc::clone(&conn)),
+        _ => Vec::new(),
+    };
     let workers = THREADNUM;
 
     let mb = Arc::new(MultiBar::new());

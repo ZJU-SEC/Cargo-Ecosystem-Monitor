@@ -6,3 +6,4 @@ target/*
 accuracy_evaluation.log
 benchmark_dataset.log
 pipeline_evaluation.log
+.vscode

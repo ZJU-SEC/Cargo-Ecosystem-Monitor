@@ -28,7 +28,7 @@ pub fn store_fails_info(conn: Arc<Mutex<Client>>, crate_id: i32) {
         .expect("Fatal error, store info fails!");
 }
 
-pub fn find_unevaluated_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
+pub fn find_unevaluated_crates_mostdir(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
     conn.lock()
         .unwrap()
         .query(
