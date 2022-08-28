@@ -331,7 +331,7 @@ fn fetch_version(
 
 fn deal_version(
     conn: Arc<Mutex<Client>>,
-    mut versions: Vec<VersionInfo>,
+    versions: Vec<VersionInfo>,
     home: &str,
     offline: bool,
 ) {
@@ -399,7 +399,7 @@ fn deal_one_version(
             let mut buf = String::new();
             file.read_to_string(&mut buf).unwrap();
 
-            let toml = buf.parse::<Value>().unwrap();
+            let toml = buf.parse::<Value>()?;
             edition = toml
                 .get("package")
                 .map(|v| {
