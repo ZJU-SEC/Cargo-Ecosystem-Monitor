@@ -297,6 +297,7 @@ fn fetch_version(
     mut versions: Vec<VersionInfo>,
 ) -> Vec<VersionInfo> {
     let mut dls = vec![];
+    let mut fail_id = vec![];
 
     for v in &versions {
         dls.push(
@@ -314,10 +315,12 @@ fn fetch_version(
         .expect("downloader broken")
         .iter()
         .enumerate()
-        .filter(|(_id, res)| res.is_err())
+        .filter(|(_, res)| res.is_err())
     {
         // TODO: fix bug on id-shift
-        let fail = versions.remove(id);
+        let fail = &versions[id];
+        fail_id.push(id);
+
         store_fails_info(
             Arc::clone(&conn),
             fail.version_id,
@@ -327,32 +330,31 @@ fn fetch_version(
     }
 
     versions
+        .into_iter()
+        .enumerate()
+        .filter(|(id, _)| !fail_id.contains(id))
+        .map(|(_, v)| v)
+        .collect()
 }
 
-fn deal_version(
-    conn: Arc<Mutex<Client>>,
-    mut versions: Vec<VersionInfo>,
-    home: &str,
-    offline: bool,
-) {
-    for (err, fail) in versions
+fn deal_version(conn: Arc<Mutex<Client>>, versions: Vec<VersionInfo>, home: &str, offline: bool) {
+    for (res, v) in versions
         .iter()
         .map(|v| deal_one_version(Arc::clone(&conn), v, home, offline))
         .collect::<Vec<Result<(), Error>>>()
         .into_iter()
         .zip(versions.iter())
-        .filter(|(res, _fail)| res.is_err())
     {
-        store_fails_info(
-            Arc::clone(&conn),
-            fail.version_id,
-            &fail.name,
-            &format!("Deal fails: {}", err.as_ref().unwrap_err()),
-        );
-    }
-
-    for v in versions {
-        update_process_status(Arc::clone(&conn), v.version_id, "done");
+        if let Err(e) = res {
+            store_fails_info(
+                Arc::clone(&conn),
+                v.version_id,
+                &v.name,
+                &format!("Deal fails: {}", e),
+            );
+        } else {
+            update_process_status(Arc::clone(&conn), v.version_id, "done");
+        }
     }
 }
 
@@ -399,7 +401,7 @@ fn deal_one_version(
             let mut buf = String::new();
             file.read_to_string(&mut buf).unwrap();
 
-            let toml = buf.parse::<Value>().unwrap();
+            let toml = buf.parse::<Value>()?;
             edition = toml
                 .get("package")
                 .map(|v| {
