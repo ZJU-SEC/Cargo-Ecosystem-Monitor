@@ -9,7 +9,7 @@ extern crate flate2;
 extern crate lazy_static;
 extern crate regex;
 extern crate tar;
-extern crate tidy;
+// extern crate tidy;
 extern crate walkdir;
 
 mod util;
@@ -128,6 +128,7 @@ fn main() {
     }
 }
 
+/*
 #[test]
 fn test() {
     use std::path::Path;
@@ -256,3 +257,4 @@ fn test() {
         }
     }
 }
+*/

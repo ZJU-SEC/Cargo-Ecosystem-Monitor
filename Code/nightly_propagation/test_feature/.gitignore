@@ -3,3 +3,4 @@ do_test
 do_test.rs
 Cargo.lock
 on_process/*
+__pycache__/*
