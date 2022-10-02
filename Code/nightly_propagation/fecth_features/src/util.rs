@@ -294,7 +294,7 @@ fn extract_info(
 fn fetch_version(
     conn: Arc<Mutex<Client>>,
     downloader: &mut Downloader,
-    mut versions: Vec<VersionInfo>,
+    versions: Vec<VersionInfo>,
 ) -> Vec<VersionInfo> {
     let mut dls = vec![];
     let mut fail_id = vec![];
@@ -364,7 +364,8 @@ fn deal_one_version(
     home: &str,
     offline: bool,
 ) -> Result<(), Error> {
-    let mut features = vec![];
+    let mut ori_features = vec![];
+    let mut pro_features = vec![];
     let mut to_dos = vec![];
     let mut edition = String::from("2015");
 
@@ -375,6 +376,11 @@ fn deal_one_version(
         archive.unpack(&format!("{}/{}-{}", home, version.name, version.num))?;
         WalkDir::new(&format!("{}/{}-{}", home, version.name, version.num))
     } else {
+        // // For test
+        // WalkDir::new(&format!(
+        //     "{}/{}-{}",
+        //     home, version.name, version.num
+        // ))
         WalkDir::new(&format!(
             "{}/{}/{}-{}",
             home, version.name, version.name, version.num
@@ -418,7 +424,7 @@ fn deal_one_version(
         let exec = Command::new(RUSTC)
             .arg("--edition")
             .arg(&edition)
-            .arg("--nft-analysis")
+            .arg("--ruf-analysis")
             .arg(&librs)
             .output()?;
 
@@ -426,13 +432,22 @@ fn deal_one_version(
             let out = String::from_utf8(exec.stdout).unwrap();
 
             lazy_static! {
-                static ref RE: Regex = Regex::new(r#"\(\[(.*?)\], (.*?)\)"#).unwrap();
+                static ref RE1: Regex = Regex::new(r#"formatori \(\[(.*?)\], (.*?)\)"#).unwrap();
+                static ref RE2: Regex = Regex::new(r#"processed \(\[(.*?)\], (.*?)\)"#).unwrap();
             }
 
-            RE.captures_iter(&out)
+            RE1.captures_iter(&out)
                 .map(|cap| {
                     if let (Some(cond), Some(feat)) = (cap.get(1), cap.get(2)) {
-                        features.push((cond.as_str().to_string(), feat.as_str().to_string()));
+                        ori_features.push((cond.as_str().to_string(), feat.as_str().to_string()));
+                    }
+                })
+                .count();
+
+            RE2.captures_iter(&out)
+                .map(|cap| {
+                    if let (Some(cond), Some(feat)) = (cap.get(1), cap.get(2)) {
+                        pro_features.push((cond.as_str().to_string(), feat.as_str().to_string()));
                     }
                 })
                 .count();
@@ -456,16 +471,42 @@ fn deal_one_version(
         }
     }
 
+    // Update ori_features
     let mut query = String::new();
 
-    if features.is_empty() {
+    if ori_features.is_empty() {
+        query.push_str(&format!(
+            "INSERT INTO version_feature_ori (id) VALUES('{}');",
+            version.version_id
+        ));
+    } else {
+        query.push_str("INSERT INTO version_feature_ori VALUES");
+        ori_features
+            .iter()
+            .map(|(cond, feat)| {
+                query.push_str(&format!(
+                    "('{}', '{}', '{}'),",
+                    version.version_id, cond, feat
+                ));
+            })
+            .count();
+        query.pop();
+        query.push(';');
+    }
+
+    conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
+
+    // Update pro_features
+    query.clear();
+
+    if pro_features.is_empty() {
         query.push_str(&format!(
             "INSERT INTO version_feature (id) VALUES('{}');",
             version.version_id
         ));
     } else {
         query.push_str("INSERT INTO version_feature VALUES");
-        features
+        pro_features
             .iter()
             .map(|(cond, feat)| {
                 query.push_str(&format!(
@@ -491,7 +532,20 @@ fn prebuild_db_table(conn: Arc<Mutex<Client>>) {
             (
                 id INT,
                 conds VARCHAR(255),
-                feature VARCHAR(40) DEFAULT 'no_feature_used'
+                feature VARCHAR(40)
+            )"#,
+            &[],
+        )
+        .unwrap();
+    
+    conn.lock()
+        .unwrap()
+        .query(
+            r#"CREATE TABLE IF NOT EXISTS public.version_feature_ori
+            (
+                id INT,
+                conds VARCHAR(255),
+                feature VARCHAR(40)
             )"#,
             &[],
         )
