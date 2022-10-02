@@ -30,13 +30,13 @@ struct VersionInfo {
 
 // https://crates.io/api/v1/crates/$(crate)/$(version)/download
 
-const RUSTC: &str = "/Users/wyffeiwhe/Desktop/rust/build/x86_64-apple-darwin/stage1/bin/rustc";
+const RUSTC: &str = "/home/loancold/Projects/Cargo-Ecosystem-Monitor/rust/build/x86_64-unknown-linux-gnu/stage1/bin/rustc";
 
 #[allow(unused)]
 pub fn run(workers: usize, todo_status: &str) {
     let conn = Arc::new(Mutex::new(
         Client::connect(
-            "host=localhost dbname=crates_08_22 user=postgres password=postgres",
+            "host=localhost dbname=crates user=postgres password=postgres",
             NoTls,
         )
         .unwrap(),
@@ -168,7 +168,7 @@ pub fn run(workers: usize, todo_status: &str) {
 pub fn run_offline(workers: usize, todo_status: &str, home: &str) {
     let conn = Arc::new(Mutex::new(
         Client::connect(
-            "host=localhost dbname=crates_08_22 user=postgres password=postgres",
+            "host=localhost dbname=crates user=postgres password=postgres",
             NoTls,
         )
         .unwrap(),
@@ -591,11 +591,11 @@ fn store_fails_info(conn: Arc<Mutex<Client>>, version_id: i32, name: &str, info:
         .query(
             &format!(
                 "INSERT INTO feature_errors VALUES('{}', '{}', '{}');",
-                version_id, name, info
+                version_id, name, info.replace("'", "''")
             ),
             &[],
         )
-        .expect("Fatal error, store info fails!");
+        .expect(&format!("Fatal error, store info {} fails!", info));
 
     update_process_status(conn, version_id, "fail");
 }
