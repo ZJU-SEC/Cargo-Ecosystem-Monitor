@@ -6,7 +6,7 @@ use regex::Regex;
 use tar::Archive;
 use walkdir::WalkDir;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{create_dir, File, OpenOptions};
 use std::io::Read;
 use std::path::Path;
@@ -23,7 +23,7 @@ pub struct Features {
     pub lib: Vec<Feature>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Active,
     Accepted,
@@ -33,7 +33,7 @@ pub enum Status {
 
 #[allow(unused)]
 pub fn download_info() {
-    create_dir("on_progress").unwrap_or_default();
+    create_dir("on_process").unwrap_or_default();
 
     let mut downloader = Downloader::builder()
         .download_folder(Path::new("on_process"))
@@ -53,7 +53,7 @@ pub fn download_info() {
     downloader.download(&dls).expect("downloader broken");
 }
 
-pub fn extract_info(ver: i32) -> Features {
+pub fn extract_info(ver: i32, multi_status_features: &mut HashSet<String>) -> Features {
     let ver_str = format!("1.{}.0", ver);
     let data = File::open(&format!("on_process/{}.tar.gz", ver_str)).expect("Open file failed");
     let mut archive = Archive::new(GzDecoder::new(data));
@@ -65,8 +65,9 @@ pub fn extract_info(ver: i32) -> Features {
 
     println!("Processing {}", ver_str);
 
+
     let lang_feature = extract_lang_feature(ver);
-    let lib_feature = extract_lib_feature(ver);
+    let lib_feature = extract_lib_feature(ver, multi_status_features);
 
     Features {
         lang: lang_feature,
@@ -74,8 +75,9 @@ pub fn extract_info(ver: i32) -> Features {
     }
 }
 
-fn extract_lib_feature(ver: i32) -> Vec<Feature> {
+fn extract_lib_feature(ver: i32, multi_status_features: &mut HashSet<String>) -> Vec<Feature> {
     let mut lib_features = HashMap::new();
+    let mut mulfeatures = HashSet::new();
 
     let ver_str = format!("1.{}.0", ver);
     let dir = WalkDir::new(format!("on_process/rust-{}", ver_str)).into_iter();
@@ -99,12 +101,21 @@ fn extract_lib_feature(ver: i32) -> Vec<Feature> {
 
         map_lib_features(contents, &mut |res| {
             if let Ok(feature) = res {
-                if !lib_features.contains_key(&feature.name) {
-                    lib_features.insert(feature.name.clone(), feature);
+                let f = feature.clone();
+                let entry = lib_features.entry(feature.name.clone()).or_insert(feature);
+                if entry.status != f.status {
+                    entry.status = Status::Active;
+                    mulfeatures.insert(f.name);
                 }
             }
         });
     }
+
+    if !mulfeatures.is_empty() {
+        println!("[error]: {:?}", mulfeatures);
+    }
+
+    multi_status_features.extend(mulfeatures);
 
     lib_features.drain().into_iter().map(|(_, v)| v).collect()
 }

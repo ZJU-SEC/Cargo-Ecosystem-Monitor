@@ -23,11 +23,11 @@ transitions = [
     {'trigger': 'meet_active', 'source': ['start', 'active', 'incomplete', 'unknown'], 'dest': 'active'},
     {'trigger': 'meet_active', 'source': ['accepted', 'removed', 'error'], 'dest': 'error'},
 
-    {'trigger': 'meet_accepted', 'source': ['active', 'accepted', 'incomplete'], 'dest': 'accepted'},
-    {'trigger': 'meet_accepted', 'source': ['start', 'removed', 'unknown', 'error'], 'dest': 'error'},
+    {'trigger': 'meet_accepted', 'source': ['start', 'unknown', 'active', 'accepted', 'incomplete'], 'dest': 'accepted'},
+    {'trigger': 'meet_accepted', 'source': ['removed', 'error'], 'dest': 'error'},
     
-    {'trigger': 'meet_removed', 'source': ['active', 'incomplete', 'removed'], 'dest': 'removed'},
-    {'trigger': 'meet_removed', 'source': ['start', 'accepted', 'unknown', 'error'], 'dest': 'error'},
+    {'trigger': 'meet_removed', 'source': ['start', 'active', 'incomplete', 'removed'], 'dest': 'removed'},
+    {'trigger': 'meet_removed', 'source': ['accepted', 'unknown', 'error'], 'dest': 'error'},
     
     {'trigger': 'meet_incomplete', 'source': ['start', 'active', 'incomplete', 'unknown'], 'dest': 'incomplete'},
     {'trigger': 'meet_incomplete', 'source': ['accepted', 'removed', 'error'], 'dest': 'error'},
@@ -70,5 +70,9 @@ for l in lifetime:
     if not analysis_one(l[1:]):
         error.append(l[0])
 
-print(len(error))
-# open('error.txt', 'w').write(str(error))
+cur = conn.cursor()
+cur.execute("CREATE TABLE IF NOT EXISTS public.feature_abnormal (name varchar)")
+for e in error:
+    cur.execute("INSERT INTO feature_abnormal VALUES ('%s')" % (e))
+
+conn.commit()

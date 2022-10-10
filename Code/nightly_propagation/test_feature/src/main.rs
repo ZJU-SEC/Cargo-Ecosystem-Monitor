@@ -1,8 +1,8 @@
 #![feature(exclusive_range_pattern)]
 
 use postgres::{Client, NoTls};
-use std::sync::{Arc, Mutex};
-use util::{extract_info, prebuild};
+use std::{sync::{Arc, Mutex}, collections::HashSet};
+use util::{extract_info, prebuild, download_info};
 
 extern crate downloader;
 extern crate flate2;
@@ -58,7 +58,6 @@ check:
 fn main() {
     // enable if rustc versions not downloaded
     // download_info();
-
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates_08_22 user=postgres password=postgres",
@@ -69,6 +68,8 @@ fn main() {
 
     prebuild(Arc::clone(&conn));
 
+    let mut multi_status_features = HashSet::new();
+
     for v in 0..=63 {
         conn.lock()
             .unwrap()
@@ -78,7 +79,8 @@ fn main() {
             )
             .unwrap_or_default();
 
-        let res = extract_info(v);
+        let res = extract_info(v, &mut multi_status_features);
+        continue;
         let mut features = vec![];
 
         features.extend(res.lang);
@@ -126,6 +128,8 @@ fn main() {
             })
             .count();
     }
+
+    println!("MultiStatus features: {:?}", multi_status_features);
 }
 
 /*
