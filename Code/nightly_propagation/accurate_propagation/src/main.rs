@@ -314,7 +314,12 @@ fn find_unresolved_crates(conn: Arc<Mutex<Client>>) -> Vec<(i32, String, String)
     .unwrap()
     .query(
         r#"CREATE TABLE IF NOT EXISTS feature_propagation_indir_relation AS
-        (SELECT DISTINCT version_from as ver, version_to, feature, nightly 
+            (WITH tmp AS(
+                SELECT id, SUBSTRING(conds, 11) as feature, feature as nightly 
+                FROM version_feature 
+                WHERE conds LIKE 'feature = %' AND feature != 'no_feature_used'
+            )
+            SELECT DISTINCT version_from as ver, version_to, feature, nightly 
             FROM tmp INNER JOIN dep_version ON id = version_to)"#,
         &[],
     )
