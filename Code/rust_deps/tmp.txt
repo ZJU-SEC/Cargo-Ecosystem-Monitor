@@ -1,3 +1,0 @@
-copy dep_version to '/home/loancold/Projects/Cargo-Ecosystem-Monitor/data/version_dep.csv' WITH CSV DELIMITER ',';
-crates: 57408
-version: 405295
