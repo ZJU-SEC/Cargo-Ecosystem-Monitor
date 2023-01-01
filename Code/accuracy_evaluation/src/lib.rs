@@ -3,7 +3,7 @@
 pub mod tools;
 
 pub const THREADNUM:usize = 8; // Thread number
-pub const CRATES_NUM:i64 = 1000; // Evaluated crate sample number
+pub const CRATES_NUM:i64 = 2000; // Evaluated crate sample number
 
 use std::collections::{HashSet, HashMap};
 use std::fs::{create_dir, remove_dir_all, File, OpenOptions};
@@ -133,8 +133,10 @@ const DEBUGDIR:&str = "debug";
 /// 6. Dependency Analysis results
 /// 7. Pipeline Resolve Error, if exists.
 fn display_full_information_of_crate() -> Result<()>{
-    let name = "finchers-ext";
-    let version = "0.11.0";
+    let name = "windows-sys";
+    let version = "0.36.1";
+    // let name = "slog-term";
+    // let version = "2.9.0";
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -200,26 +202,43 @@ fn display_full_information_of_crate() -> Result<()>{
     println!("Remove Cargo.lock {}/{}/{}-{}/Cargo.lock success: {}", DEBUGDIR, name, name, version, output_str);
     // Replace original file
     {
-        let toml = File::open(Path::new(&format!("{}/{}/{}-{}/Cargo.toml", DEBUGDIR, name, name, version)))?;
-        let mut buf_reader = BufReader::new(toml);
         let mut contents = String::new();
-        buf_reader.read_to_string(&mut contents)?;
+        {
+            let toml = File::open(Path::new(&format!("{}/{}/{}-{}/Cargo.toml", DEBUGDIR, name, name, version)))?;
+            let mut buf_reader = BufReader::new(toml);
+            buf_reader.read_to_string(&mut contents)?;
+        }
+        // Replace edition
         let re = Regex::new(r#"edition = "[0-9]+""#).unwrap();
         let mut edition:String = String::new();
         for cap in re.captures_iter(&contents) {
             edition = cap[0].to_string();
         }
-        let new_content = if !edition.is_empty(){
+        contents = if !edition.is_empty(){
             contents.replace(&edition, r#"edition = "2021""#)
         }
         else{
             contents.replace("[package]", "[package]\nedition = \"2021\"")
         };
-        println!("File : {}", new_content);
+        // Replace rustc version
+        let re = Regex::new(r#"rust-version = ".+"#).unwrap();
+        let mut rustc_version:String = String::new();
+        for cap in re.captures_iter(&contents) {
+            rustc_version = cap[0].to_string();
+        }
+        
+        let new_content = if !rustc_version.is_empty(){
+            contents.replace(&rustc_version, r#""#)
+        }
+        else{
+            contents
+        };
+        // println!("new_content : {}", new_content);
 
         
         let mut toml = File::options().write(true).
             open(Path::new(&format!("{}/{}/{}-{}/Cargo.toml", DEBUGDIR, name, name, version)))?;
+        toml.set_len(0)?;
         toml.write_all(new_content.as_bytes())?;
         toml.sync_all()?;
     }
@@ -239,7 +258,7 @@ fn display_full_information_of_crate() -> Result<()>{
                                         .arg("all")
                                         .output().expect("tree exec error!");
     let output_str = String::from_utf8_lossy(&output.stdout);
-    // println!("dep: {}", output_str);
+    println!("dep: {}", output_str);
     for cap in re.captures_iter(&output_str) {
         let dep = &cap[0];
         let name_ver:Vec<&str> = dep.split(' ').collect();
@@ -332,14 +351,14 @@ fn display_full_information_of_crate() -> Result<()>{
 
 
     // 7. Pipeline Resolve Error, if exists.
-    let query = format!(
-        "SELECT error FROM dep_errors WHERE ver = {}
-        ", version_id
-    );
-    if let Some(row) = conn.lock().unwrap().query(&query, &[]).unwrap().first(){
-        let error:String = row.get(0);
-        println!("Pipeline Resolve Error: {}", error);
-    }
+    // let query = format!(
+    //     "SELECT error FROM dep_errors WHERE ver = {}
+    //     ", version_id
+    // );
+    // if let Some(row) = conn.lock().unwrap().query(&query, &[]).unwrap().first(){
+    //     let error:String = row.get(0);
+    //     println!("Pipeline Resolve Error: {}", error);
+    // }
 
     Ok(())
 }

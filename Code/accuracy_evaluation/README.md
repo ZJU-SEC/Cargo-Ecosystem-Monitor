@@ -18,7 +18,7 @@ When re-run the program, you have to manually clear all the cache data:
 
 The evaluation machanism works as follows:
 
-1. Find top 1000(customized) crates with most direct dependencies.
+1. Find top 2000(customized) crates with most direct dependencies.
 2. Download crate source code from official database.
 3. Use Cargo to resolve the dependencies of each crate in local and real environment.
 4. Compare the resolution results with database created by our Resolution Pipeline.
@@ -34,7 +34,7 @@ We have three binary programs, they should be executed in order:
 3. results_summary: This process will summarize all comparison results and give final judgement.
 
 
-### Broken-point Continuingly-transferring
+### Break-point Continuingly-transferring
 
 To maintain the resolving process, we build a database table `accuracy_evaluation_status`. In `status` field, there are three possible values, which are `unevaluated`, `resolved`, `evaluated`, `fails`.
 
