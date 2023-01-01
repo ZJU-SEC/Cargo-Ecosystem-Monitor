@@ -12,6 +12,8 @@ use simplelog::*;
 use std::fs::OpenOptions;
 use util::{run, run_offline};
 
+const CRATESDIR:&str = "/media/loancold/HardDisk/ProjectInDisk/crate_downloader/on_process";
+
 fn main() {
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -35,6 +37,6 @@ fn main() {
     .unwrap();
 
     // run(1, "undone")
-    run_offline(1, "undone", "./on_process")
+    run_offline(20, "undone", CRATESDIR)
     // run_imcomplete("undone")
 }
