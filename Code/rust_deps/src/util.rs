@@ -25,7 +25,7 @@ struct VersionInfo {
     num: String,
 }
 
-const THREAD_DATA_SIZE: i64 = 20;
+const THREAD_DATA_SIZE: i64 = 500;
 const RERESOLVE_DATA_SIZE: i64 = 20;
 
 
@@ -51,6 +51,8 @@ pub fn run_deps(workers: usize, status: &str) {
     ));
     println!("DB Prebuild");
     prebuild_db_table(Arc::clone(&conn));
+    // let ver_name_table = get_ver_name_table(Arc::clone(&conn));
+    let ver_name_table = Arc::new(get_ver_name_table(Arc::clone(&conn)));
 
     println!("Creating Channel");
     // Create channel
@@ -61,6 +63,7 @@ pub fn run_deps(workers: usize, status: &str) {
     for i in 0..workers {
         let conn = conn.clone();
         let rx = rx.clone();
+        let ver_name_table = ver_name_table.clone();
 
         handles.push(thread::spawn(move || {
             while let Ok(versions) = rx.recv() {
@@ -86,7 +89,7 @@ pub fn run_deps(workers: usize, status: &str) {
                     });
                     if catch_unwind(|| {
                         //  MAIN OPERATION: Dependency Resolution
-                        if let Err(e) = resolve(i as u32, Arc::clone(&conn), &v) {
+                        if let Err(e) = resolve(i as u32, Arc::clone(&conn), &v, Arc::clone(&ver_name_table)) {
                             warn!(
                                 "Resolve version {} fails, due to error: {}",
                                 v.version_id, e
@@ -229,9 +232,14 @@ pub fn run_deps(workers: usize, status: &str) {
 
 
 /// Wrapper of [`resolve_store_deps_of_version`]
-fn resolve(thread_id: u32, conn: Arc<Mutex<Client>>, version_info: &VersionInfo) -> Result<()> {
+fn resolve(
+    thread_id: u32, 
+    conn: Arc<Mutex<Client>>, 
+    version_info: &VersionInfo,
+    ver_name_table: Arc<HashMap<(String, String), i32>>,
+) -> Result<()> {
     let version_id = version_info.version_id;
-    let res = resolve_store_deps_of_version(thread_id, Arc::clone(&conn), version_info);
+    let res = resolve_store_deps_of_version(thread_id, Arc::clone(&conn), version_info, ver_name_table);
 
     let status = if res.is_ok() { "done" } else { "fail" };
 
@@ -241,7 +249,7 @@ fn resolve(thread_id: u32, conn: Arc<Mutex<Client>>, version_info: &VersionInfo)
 }
 
 fn update_process_status(conn: Arc<Mutex<Client>>, version_id: i32, status: &str){
-    warn!("update status");
+    // warn!("update status");
     conn.lock()
         .unwrap()
         .query(
@@ -259,6 +267,7 @@ fn resolve_store_deps_of_version(
     thread_id: u32,
     conn: Arc<Mutex<Client>>,
     version_info: &VersionInfo,
+    ver_name_table: Arc<HashMap<(String, String), i32>>,
 ) -> Result<()> {
     let version_id = version_info.version_id;
     let name = &version_info.name;
@@ -341,8 +350,8 @@ fn resolve_store_deps_of_version(
     for pkg in resolve.iter() {
         map.insert(
             (pkg.name().to_string(), pkg.version().to_string()),
-            get_version_by_name_version(
-                Arc::clone(&conn),
+            get_version_by_name_version_test(
+                Arc::clone(&ver_name_table),
                 &pkg.name().to_string(),
                 &pkg.version().to_string(),
             )?,
@@ -453,6 +462,25 @@ fn prebuild_db_table(conn: Arc<Mutex<Client>>){
         );
         conn.lock().unwrap().query(&query, &[]).unwrap();
     }
+}
+
+fn get_ver_name_table(conn: Arc<Mutex<Client>>) -> HashMap<(String, String), i32>{
+    let rows = conn.lock()
+    .unwrap()
+    .query(
+        r#"SELECT id, crate_id, num ,name FROM versions_with_name"#,
+        &[],
+    ).unwrap();
+    // <(name, num), version_id>
+    let mut ver_name_table:HashMap<(String, String), i32> = HashMap::new();
+    for ver in rows{
+        let name:String = ver.get(3);
+        let num:String = ver.get(2);
+        let version_id:i32 = ver.get(0);
+        ver_name_table.entry((name, num)).or_insert(version_id);
+    }
+    ver_name_table
+
 }
 
 /// Get a name by crate id.
@@ -609,6 +637,13 @@ fn get_version_by_name_version(conn: Arc<Mutex<Client>>, name: &str, version: &s
         .get(0))
 }
 
+fn get_version_by_name_version_test(table: Arc<HashMap<(String, String), i32>>, name: &str, version: &str) -> Result<i32> {
+    Ok(
+        table.get(&(name.to_string(), version.to_string()))
+            .context("Can't get version_id")?
+            .clone())
+}
+
 /// Get version by name and version string
 ///
 /// # Example
@@ -658,9 +693,13 @@ fn resolve_test() -> io::Result<()> {
         )
         .unwrap(),
     ));
+    let ver_name_table = Arc::new(get_ver_name_table(Arc::clone(&conn)));
+    
+    println!("{:#?}", get_version_by_name_version_test(Arc::clone(&ver_name_table), "tin-summer", "1.21.3"));
+    return Ok(());
     let thread_id = 999;
-    let name = String::from("openmls");
-    let num = String::from("0.4.1");
+    let name = String::from("tin-summer");
+    let num = String::from("1.21.3");
     let mut features = Vec::new();
     // let features:Vec<String> = Vec::new();
 
@@ -739,6 +778,23 @@ fn resolve_test() -> io::Result<()> {
     )
     .unwrap();
     println!("{:#?}", resolve);
+
+    {
+        let name = "clang-sys";
+        let num = "1.3.3";
+        let v = format!("{}:{}", name, num);
+        let query_feature = "clang_3_9";
+        let nightly_feature = "THis one";
+        let mut tmp_features:Vec<&str> = Vec::new();
+        if let Ok(res) = resolve.query(&v) {
+            for feature in resolve.features(res) {
+                if feature == query_feature{
+                    tmp_features.push(nightly_feature);
+                }
+            }
+        }
+        println!("{:#?}", tmp_features);
+    }
 
     Ok(())
 
