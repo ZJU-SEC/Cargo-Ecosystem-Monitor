@@ -247,7 +247,7 @@ WITH max_depth_version AS
 SELECT max_dep, COUNT(max_dep) FROM max_depth_version GROUP BY max_dep ORDER BY max_dep asc
 
 
--- Evaluation
+-- Accuracy Evaluation
 -- 1. Find crates with most indirect dependencies 
 WITH most_dep_version AS
     (SELECT version_id, COUNT(crate_id) as deps FROM dependencies GROUP BY version_id)
@@ -265,3 +265,5 @@ SELECT name, num FROM target_dep INNER JOIN crates ON crate_id = id ORDER BY num
 
 
 SELECT * FROM accuracy_evaluation_status WHERE status = `unevaluated`
+
+
