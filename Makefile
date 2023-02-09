@@ -49,5 +49,10 @@ submodule:
 	git submodule sync
 	git submodule update --init
 
+
+# Set correct commits of Rust index.
+setindex:
+	cd crates.io-index && git checkout `git rev-list -n 1 --first-parent --before="$(year)-$(month)-$(day) $(hour):$(minute):$(sencond) +0000" master`
+
 # all: rust postgresql
 # 	echo finish
