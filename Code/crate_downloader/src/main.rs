@@ -1,23 +1,24 @@
-
-use std::fs::{create_dir, remove_dir_all, File, OpenOptions};
+use std::fs::{create_dir, remove_dir_all, OpenOptions};
+use std::io;
 use std::path::Path;
+use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::process::Command;
 
-use simplelog::*;
-use log::{error, info, warn};
 use anyhow::{anyhow, Result};
-use downloader::{Download, Downloader};
-use postgres::{Client, NoTls};
 use crossbeam::channel::{self};
+use downloader::{Download, Downloader};
+use log::{error, warn};
 use pbr::MultiBar;
+use postgres::{Client, NoTls};
+use simplelog::*;
 
-pub const CRATESDIR:&str = "./on_process";
-const THREADNUM:usize = 20; // Thread number
+const CRATESDIR: &str = "./on_process";
+const THREADNUM: usize = 2;
+const DBNAME: &str = "crates";
 
 #[derive(Debug)]
-pub struct CrateInfo{
+pub struct CrateInfo {
     pub crate_id: i32,
     pub version_id: i32,
     pub name: String,
@@ -35,43 +36,40 @@ fn main() {
             ColorChoice::Auto,
         ),
         WriteLogger::new(
-            LevelFilter::Info,
+            LevelFilter::Warn,
             simplelog::Config::default(),
             OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .append(true)
-                .open("./benchmark_dataset.log")
+                .open("./crates_downloader.log")
                 .unwrap(),
         ),
     ])
     .unwrap();
 
-    // Prepare work directories
-    
     // Main Process
     run();
 }
 
-
-
-fn run(){
+fn run() {
     let conn = Arc::new(Mutex::new(
         Client::connect(
-            "host=localhost dbname=crates user=postgres password=postgres",
+            &format!("host=localhost dbname={DBNAME} user=postgres password=postgres"),
             NoTls,
         )
         .unwrap(),
     ));
+
     let undownloaded_crates = find_undownloaded_crates(Arc::clone(&conn));
     let workers = THREADNUM;
 
     let mb = Arc::new(MultiBar::new());
     let mut mpb = mb.create_bar(undownloaded_crates.len() as u64);
-    mpb.format("╢▌▌░╟");
+    mpb.format("|+-|");
     mpb.set(0);
-
+ 
     let (tx, rx) = channel::bounded(2 * workers);
 
     let mut handles = vec![];
@@ -79,7 +77,6 @@ fn run(){
         let rx = rx.clone();
         let conn = Arc::clone(&conn);
         let mb = Arc::clone(&mb);
-        // let targets_thread = Arc::clone(&targets_thread);
 
         // Thread Operation
         handles.push(thread::spawn(move || {
@@ -90,30 +87,36 @@ fn run(){
                 .build()
                 .expect("Fatal Error, build downloader fails!");
 
-            while let Ok(crate_info) = rx.recv(){
-                let crate_info:CrateInfo = crate_info;
+            while let Ok(crate_info) = rx.recv() {
+                let crate_info: CrateInfo = crate_info;
                 pb.set(0);
                 pb.message(&(crate_info.name));
 
-                if let Err(e) = fetch_crate(&mut downloader, &crate_info.name, &crate_info.version_num) {
+                if let Err(e) =
+                    fetch_crate(&mut downloader, &crate_info.name, &crate_info.version_num)
+                {
                     warn!("Thread {}: Fetch fails: crate {:?}, {}", i, crate_info, e);
-                    store_fails_info(Arc::clone(&conn), crate_info.crate_id);
-                }
-                else{
-                    deal_with_crate(&crate_info);
-                    store_success_info(Arc::clone(&conn), crate_info.crate_id);
+                    store_fails_info(Arc::clone(&conn), crate_info);
+                } else if let Err(e) = deal_with_crate(&crate_info) {
+                    warn!("Thread {}: Unzip fails: crate {:?}, {}", i, crate_info, e);
+                    store_fails_info(Arc::clone(&conn), crate_info);
+                } else {
+                    store_success_info(Arc::clone(&conn), crate_info);
                 }
             }
+
             pb.finish();
         }));
     }
 
     handles.push(thread::spawn(move || mb.listen()));
+
     // Send data to child thread
     for crate_info in undownloaded_crates {
         tx.send(crate_info).expect("Fatal error, send fails");
         mpb.inc();
     }
+
     std::mem::drop(tx);
     mpb.finish();
 
@@ -125,23 +128,6 @@ fn run(){
     }
 
     println!(r#"\\\ Done! ///"#)
-}
-
-fn deal_with_crate(
-    crate_info: &CrateInfo
-){
-    let name = &crate_info.name;
-    let version = &crate_info.version_num;
-
-    // Decompress
-    let output = Command::new("tar").arg("-zxf")
-                        .arg(format!("{}/{}/{}.tgz", CRATESDIR, name, version))
-                        .arg("-C")
-                        .arg(format!("{}/{}", CRATESDIR, name))
-                        .output().expect("Ungzip exec error!");
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    info!("Decompress {}/{}/{}.tgz success: {}", CRATESDIR, name, version, output_str);
-    
 }
 
 pub fn find_undownloaded_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
@@ -159,11 +145,15 @@ pub fn find_undownloaded_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
             &[],
         )
         .unwrap();
+
     // Check if table is empty
-    if conn.lock().unwrap().query(
-            "SELECT * FROM download_status LIMIT 1",
-            &[],
-        ).unwrap().first().is_none()
+    if conn
+        .lock()
+        .unwrap()
+        .query("SELECT * FROM download_status LIMIT 1", &[])
+        .unwrap()
+        .first()
+        .is_none()
     {
         // Empty: Select top crates with most direct dependency
         conn.lock().unwrap()
@@ -173,73 +163,80 @@ pub fn find_undownloaded_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
                     FROM crates INNER JOIN versions
                     ON crates.id = crate_id",
                 &[],
-            ).unwrap().first();
-        remove_dir_all(CRATESDIR).unwrap_or_default();// Delete tmp crates file directory
+            ).unwrap();
+        remove_dir_all(CRATESDIR).unwrap_or_default(); // Delete tmp crates file directory
         create_dir(Path::new(CRATESDIR)).unwrap_or_default(); // Crates file directory
     }
-    let query = format!(
-        "SELECT * FROM download_status WHERE status = 'undownloaded'"
-    );
+
+    let query = format!("SELECT * FROM download_status WHERE status = 'undownloaded'");
     let row = conn.lock().unwrap().query(&query, &[]).unwrap();
-    row.iter().map(|ver| 
-        CrateInfo{
-            crate_id:ver.get(0),
+    row.iter()
+        .map(|ver| CrateInfo {
+            crate_id: ver.get(0),
             version_id: ver.get(1),
             name: ver.get(2),
             version_num: ver.get(3),
             status: ver.get(4),
-        }
-    ).collect()
+        })
+        .collect()
 }
 
-pub fn store_fails_info(conn: Arc<Mutex<Client>>, crate_id: i32) {
-    conn.lock()
-        .unwrap()
-        .query(
-            &format!(
-                "UPDATE download_status SET status = 'fail' WHERE crate_id = '{}';",
-                crate_id
-            ),
-            &[],
-        )
-        .expect("Fatal error, store info fails!");
-}
-
-pub fn store_success_info(conn: Arc<Mutex<Client>>, crate_id: i32) {
-    conn.lock()
-        .unwrap()
-        .query(
-            &format!(
-                "UPDATE download_status SET status = 'success' WHERE crate_id = '{}';",
-                crate_id
-            ),
-            &[],
-        )
-        .expect("Fatal error, store info fails!");
-}
-
-pub fn fetch_crate(
-    downloader: &mut Downloader,
-    name: &str,
-    version: &str,
-) -> Result<()> {
+pub fn fetch_crate(downloader: &mut Downloader, name: &str, version: &str) -> Result<()> {
     let mut dls = vec![];
 
     create_dir(Path::new(&format!("{}/{}", CRATESDIR, name))).unwrap_or_default();
 
     dls.push(
         Download::new(&format!(
-            "https://crates.io/api/v1/crates/{}/{}/download",
-            name, version
+            "https://crates.io/api/v1/crates/{name}/{version}/download",
         ))
-        .file_name(Path::new(&format!("{}/{}.tgz", name, version))),
+        .file_name(Path::new(&format!("{name}/{version}.tgz"))),
     );
 
     let res = downloader.download(&dls)?;
 
-    if res.iter().any(|res| res.is_err()) {
-        return Err(anyhow!("Download error."));
+    if res.first().unwrap().is_err() {
+        return Err(anyhow!("Download error"));
     }
 
     return Ok(());
+}
+
+fn deal_with_crate(crate_info: &CrateInfo) -> io::Result<Output> {
+    let name = &crate_info.name;
+    let version = &crate_info.version_num;
+
+    // Decompress
+    Command::new("tar")
+        .arg("-zxf")
+        .arg(format!("{CRATESDIR}/{name}/{version}.tgz"))
+        .arg("-C")
+        .arg(format!("{CRATESDIR}/{name}"))
+        .output()
+}
+
+pub fn store_fails_info(conn: Arc<Mutex<Client>>, crates: CrateInfo) {
+    conn.lock()
+        .unwrap()
+        .query(
+            &format!(
+                "UPDATE download_status SET status = 'fail' WHERE crate_id = '{}' and version_id = '{}';",
+                crates.crate_id, crates.version_id
+            ),
+            &[],
+        )
+        .expect("Fatal error, store info fails!");
+}
+
+pub fn store_success_info(conn: Arc<Mutex<Client>>, crates: CrateInfo) {
+    conn.lock()
+        .unwrap()
+        .query(
+            &format!(
+                "UPDATE download_status SET status = 'success' WHERE crate_id = '{}' and version_id = '{}';",
+                crates.crate_id, crates.version_id
+            ),
+            &[],
+        )
+        .expect("Fatal error, store info fails!");
 }
