@@ -32,8 +32,8 @@ transitions = [
     {'trigger': 'meet_incomplete', 'source': ['start', 'active', 'incomplete', 'unknown'], 'dest': 'incomplete'},
     {'trigger': 'meet_incomplete', 'source': ['accepted', 'removed', 'error'], 'dest': 'error'},
 
-    {'trigger': 'meet_unknown', 'source': ['start', 'active', 'incomplete', 'unknown', 'removed'], 'dest': 'unknown'},
-    {'trigger': 'meet_unknown', 'source': ['accepted', 'error'], 'dest': 'error'},
+    {'trigger': 'meet_unknown', 'source': ['start', 'unknown'], 'dest': 'unknown'},
+    {'trigger': 'meet_unknown', 'source': ['accepted', 'removed', 'active', 'incomplete', 'error'], 'dest': 'error'},
 ]
 
 def analysis_one(slist: list) -> bool:
