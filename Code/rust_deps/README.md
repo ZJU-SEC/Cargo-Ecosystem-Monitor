@@ -31,7 +31,7 @@ If you have run this tool, there will be multiple `dep*.toml` file and `job*`  d
 
 4. Clear your built tables
 
-If you have run this tool, there will be extra tables in DB which is old. You should drop all these tables.
+If you have run this tool, there will be extra tables in DB which are old. You should drop all these tables.
 
 ### Architecture
 

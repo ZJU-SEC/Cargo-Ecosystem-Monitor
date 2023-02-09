@@ -17,6 +17,10 @@ path = "src/bin/benchmark_dataset.rs"
 name = "pipeline_evaluation"
 path = "src/bin/pipeline_evaluation.rs"
 
+[[bin]]
+name = "auto_run"
+path = "src/bin/auto_run.rs"
+
 [dependencies]
 downloader = "0.2.6"
 postgres = "0.19.2"

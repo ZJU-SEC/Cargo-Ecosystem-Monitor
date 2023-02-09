@@ -5,7 +5,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::process::Command;
+use std::io::BufReader;
 use std::io::prelude::*;
+use std::env;
 
 use simplelog::*;
 use anyhow::{ Result};
@@ -18,11 +20,12 @@ use regex::Regex;
 
 use accuracy_evaluation::tools::db::*;
 use accuracy_evaluation::tools::helper::*;
+use accuracy_evaluation::THREADNUM;
 
-const THREADNUM:usize = 20; // Thread number
-const CRATES_NUM:i64 = 1000; // Evaluated crate sample number
 
 fn main() {
+
+
     // Prepare log file
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -55,12 +58,23 @@ fn main() {
     create_dir(Path::new(CARGOTREE_DEPENDENCYDIR)).unwrap_or_default(); // Resolved dependency directory
     create_dir(Path::new(PIPELINE_DEPENDENCYDIR)).unwrap_or_default(); // Resolved dependency directory
     // Main Process
-    run();
+    
+    let args: Vec<String> = env::args().collect();
+    println!("{:?}", args);
+    if args.len() == 2{
+        let dataset = &args[1];
+        match dataset.as_str() {
+            "hot" => run("hot"),
+            "random" => run("random"),
+            "mostdir" => run("mostdir"),
+            _ => error!("No such dataset!"),
+        }
+    }
 }
 
 
 
-fn run(){
+fn run(dataset: &str){
     // Get all possible rustup targets
     // targets_thread Data Structure: Arc<RwLock<vec<target_str>>>
     // RwLock is used for sharing read-only data without lock among threads.
@@ -86,7 +100,12 @@ fn run(){
         )
         .unwrap(),
     ));
-    let unevaluated_crates = find_unevaluated_crates_hot(Arc::clone(&conn));
+    let unevaluated_crates = match dataset {
+        "hot" => find_unevaluated_crates_hot(Arc::clone(&conn)),
+        "random" => find_unevaluated_crates_rand(Arc::clone(&conn)),
+        "mostdir" => find_unevaluated_crates_mostdir(Arc::clone(&conn)),
+        _ => Vec::new(),
+    };
     let workers = THREADNUM;
 
     let mb = Arc::new(MultiBar::new());
@@ -173,7 +192,12 @@ fn deal_crate(
 ) -> Result<()> {
     // Get resolution results of both pipeline and cargo tree
     // Extract each dependency, deduplicate and store in csv format
-    let cargotree_crates = cargo_tree_resolution(crate_info);
+    let cargotree_crates = if let Ok(cargotree_crates) = cargo_tree_resolution(crate_info){
+        cargotree_crates
+    }
+    else{
+        HashMap::new()
+    };
     let path_string = format!("{}/{}-{}.csv", CARGOTREE_DEPENDENCYDIR, crate_info.name, crate_info.version_num);
     write_dependency_file(path_string, &cargotree_crates);
 
@@ -193,7 +217,7 @@ fn deal_crate(
 
 fn cargo_tree_resolution(
     crate_info: &CrateInfo
-) -> HashMap<String, HashSet<String>>{
+) -> Result<HashMap<String, HashSet<String>>>{
     let name = &crate_info.name;
     let version = &crate_info.version_num;
 
@@ -211,7 +235,45 @@ fn cargo_tree_resolution(
                                     .output().expect("rm Cargo.lock exec error!");
     let output_str = String::from_utf8_lossy(&output.stdout);
     info!("Remove Cargo.lock {}/{}/{}-{}/Cargo.toml success: {}", CRATESDIR, name, name, version, output_str);
-    
+    // Replace original file
+    {
+        let toml = File::open(Path::new(&format!("{}/{}/{}-{}/Cargo.toml", CRATESDIR, name, name, version)))?;
+        let mut buf_reader = BufReader::new(toml);
+        let mut contents = String::new();
+        buf_reader.read_to_string(&mut contents)?;
+        // Replace edition
+        let re = Regex::new(r#"edition = "[0-9]+""#).unwrap();
+        let mut edition:String = String::new();
+        for cap in re.captures_iter(&contents) {
+            edition = cap[0].to_string();
+        }
+        contents = if !edition.is_empty(){
+            contents.replace(&edition, r#"edition = "2021""#)
+        }
+        else{
+            contents.replace("[package]", "[package]\nedition = \"2021\"")
+        };
+        // Replace rustc version
+        let re = Regex::new(r#"rust-version = ".+"#).unwrap();
+        let mut rustc_version:String = String::new();
+        for cap in re.captures_iter(&contents) {
+            rustc_version = cap[0].to_string();
+        }
+        
+        let new_content = if !rustc_version.is_empty(){
+            contents.replace(&rustc_version, r#""#)
+        }
+        else{
+            contents
+        };
+        
+        let mut toml = File::options().write(true).
+            open(Path::new(&format!("{}/{}/{}-{}/Cargo.toml", CRATESDIR, name, name, version)))?;
+        toml.set_len(0)?;
+        toml.write_all(new_content.as_bytes())?;
+        toml.sync_all()?;
+    }
+
     // Run `cargo tree` in each target, get union of their dependency graph as final results.
     // Data structure of `dependencies`: HashMap<crate_name, HashSet<versions> >
     let mut dependencies:HashMap<String, HashSet<String>> = HashMap::new();
@@ -237,7 +299,7 @@ fn cargo_tree_resolution(
     }
     let crate_name = dependencies.entry(String::from(name)).or_insert(HashSet::new());
     (*crate_name).remove(&String::from(version)); // Remove current version
-    dependencies
+    Ok(dependencies)
     
 }
 
