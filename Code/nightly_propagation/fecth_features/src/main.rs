@@ -34,7 +34,6 @@ fn main() {
     ])
     .unwrap();
 
-    // run(1, "undone")
-    run_offline(1, "undone", "./on_process")
-    // run_imcomplete("undone")
+    // run(5, "undone")
+    run_offline(5, "fail", "./on_process")
 }
