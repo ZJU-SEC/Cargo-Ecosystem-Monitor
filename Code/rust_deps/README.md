@@ -33,6 +33,11 @@ If you have run this tool, there will be multiple `dep*.toml` file and `job*`  d
 
 If you have run this tool, there will be extra tables in DB which are old. You should drop all these tables.
 
+
+5. Run!
+
+Be sure that you have corretly set up your database according to our guide in the project root directory. Moreover, if you can't connect to database, there might be sth wrong with the connection, including port(sometimes 5432, and sometimes 5434) and else.
+
 ### Architecture
 
 We seperate several threads to resolve crates. The main thread will:
