@@ -67,7 +67,7 @@ fn run() {
 
     let mb = Arc::new(MultiBar::new());
     let mut mpb = mb.create_bar(undownloaded_crates.len() as u64);
-    mpb.format("|+-|");
+    mpb.format("|++-|");
     mpb.set(0);
  
     let (tx, rx) = channel::bounded(2 * workers);
@@ -89,6 +89,7 @@ fn run() {
 
             while let Ok(crate_info) = rx.recv() {
                 let crate_info: CrateInfo = crate_info;
+                pb.format("[=>_]");
                 pb.set(0);
                 pb.message(&(crate_info.name));
 
