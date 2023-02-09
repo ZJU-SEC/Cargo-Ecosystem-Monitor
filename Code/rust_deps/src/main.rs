@@ -30,7 +30,7 @@ fn main() {
     ])
     .unwrap();
 
-    run_deps(20, "undone");
+    run_deps(40, "undone");
     // run_deps(20, "processing");
     // run_deps(1, "fail");
 }
