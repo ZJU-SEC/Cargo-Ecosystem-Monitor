@@ -62,7 +62,7 @@ def fetch_lifetime() -> list:
     return cur.fetchall()
 
 
-conn = pg.connect(database='crates_08_22', user='postgres', password='postgres')
+conn = pg.connect(database='crates', user='postgres', password='postgres')
 
 error = []
 lifetime = fetch_lifetime()

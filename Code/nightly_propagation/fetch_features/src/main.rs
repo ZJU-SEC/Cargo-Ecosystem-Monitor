@@ -12,6 +12,8 @@ use simplelog::*;
 use std::fs::OpenOptions;
 use util::{run, run_offline};
 
+const CRATEDIR: &str = "path/to/sourse_code";
+
 fn main() {
     CombinedLogger::init(vec![
         TermLogger::new(
@@ -35,5 +37,5 @@ fn main() {
     .unwrap();
 
     // run(5, "undone")
-    run_offline(5, "fail", "./on_process")
+    run_offline(20, "undone", CRATEDIR)
 }

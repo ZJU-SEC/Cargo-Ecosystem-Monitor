@@ -2,17 +2,22 @@
 
 use postgres::{Client, NoTls};
 use std::{sync::{Arc, Mutex}, collections::HashSet};
-use util::{extract_info, prebuild, download_info};
+use util::{extract_info, prebuild};
+
+#[allow(unused)]
+use util::download_info;
+
 
 extern crate downloader;
 extern crate flate2;
 extern crate lazy_static;
 extern crate regex;
 extern crate tar;
-// extern crate tidy;
 extern crate walkdir;
 
+
 mod util;
+
 
 /*
 check:
@@ -37,7 +42,7 @@ regex:
     \((active|accepted|removed|incomplete), ([a-zA-Z0-9_]+?), .+\)
 
 
-link: https://github.com/rust-lang/rust/archive/refs/tags/1.0.0.tar.gz
+link: https://github.com/rust-lang/rust/tags
 */
 
 /*
@@ -49,7 +54,7 @@ check:
     1.25.0 ~  1.40.0    #[stable(feature = "xxx"[, since = "1.0.0"])]
                         #[unstable(feature = "xxx"[, reason = "xxx"][, issue = "xxx"])]
                         #[rustc_const_unstable(feature = "xxx")]
-    1.41.0 ~  1.62.0    #[stable(feature = "xxx"[, since = "1.0.0"])]
+    1.41.0 ~  1.67.0    #[stable(feature = "xxx"[, since = "1.0.0"])]
                         #[unstable(feature = "xxx"[, reason = "xxx"][, issue = "xxx"])]
                         #[rustc_const_unstable(feature = "xxx"[, issue = "xxx"][, reason = "xxx"])]
                         #[rustc_const_stable(feature = "xxx"[, since = "1.0.0"])]
@@ -57,10 +62,10 @@ check:
 
 fn main() {
     // enable if rustc versions not downloaded
-    // download_info();
+    // download_info(); return;
     let conn = Arc::new(Mutex::new(
         Client::connect(
-            "host=localhost dbname=crates_08_22 user=postgres password=postgres",
+            "host=localhost dbname=crates user=postgres password=postgres",
             NoTls,
         )
         .unwrap(),
@@ -69,18 +74,17 @@ fn main() {
     prebuild(Arc::clone(&conn));
 
     let mut multi_status_features = HashSet::new();
-
-    for v in 0..=63 {
+    
+    for v in 0..=67 {
         conn.lock()
             .unwrap()
             .query(
-                &format!("ALTER TABLE feature_timeline ADD COLUMN v1_{}_0 VARCHAR", v),
+                &format!("ALTER TABLE feature_timeline ADD COLUMN v1_{v}_0 VARCHAR"),
                 &[],
             )
             .unwrap_or_default();
 
         let res = extract_info(v, &mut multi_status_features);
-        continue;
         let mut features = vec![];
 
         features.extend(res.lang);
@@ -129,8 +133,9 @@ fn main() {
             .count();
     }
 
-    println!("MultiStatus features: {:?}", multi_status_features);
+    // println!("MultiStatus features: {:?}", multi_status_features);
 }
+
 
 /*
 #[test]

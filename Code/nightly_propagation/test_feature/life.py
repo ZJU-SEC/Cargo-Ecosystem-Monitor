@@ -1,4 +1,3 @@
-from operator import le
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,16 +9,16 @@ from matplotlib.lines import Line2D
 # blue   green    red     yellow    grey
 # 0      1         2        3         4
 
-conn = pg.connect(database='crates_08_22', user='postgres', password='postgres')
+conn = pg.connect(database='crates', user='postgres', password='postgres')
 color = ["cornflower blue", "light green", "coral", "khaki", "light grey"]
 cmap = sns.xkcd_palette(color)
-column = ["1.%s.0" % i for i in range(0, 64)]
+column = ["1.%s.0" % i for i in range(0, 68)]
 
 def fetch_lifetime() -> pd.DataFrame:
     cur = conn.cursor()
     # cur.execute('select * from feature_timeline')
-    cur.execute('SELECT * FROM feature_timeline WHERE name in (SELECT name from feature_abnormal) ORDER BY "v1_60_0", "v1_50_0", "v1_40_0", "v1_30_0", "v1_20_0", "v1_10_0", "v1_0_0"')
-    # cur.execute('SELECT * FROM feature_timeline ORDER BY "v1_60_0", "v1_50_0", "v1_40_0", "v1_30_0", "v1_20_0", "v1_10_0", "v1_0_0"')
+    # cur.execute('SELECT * FROM feature_timeline WHERE name in (SELECT name from feature_abnormal) ORDER BY "v1_60_0", "v1_50_0", "v1_40_0", "v1_30_0", "v1_20_0", "v1_10_0", "v1_0_0"')
+    cur.execute('SELECT * FROM feature_timeline ORDER BY "v1_60_0", "v1_50_0", "v1_40_0", "v1_30_0", "v1_20_0", "v1_10_0", "v1_0_0"')
     rows = np.array(cur.fetchall())
     lifetime = rows[:, 1:]
     index = rows[:, 0]
