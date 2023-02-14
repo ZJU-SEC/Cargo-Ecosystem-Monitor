@@ -12,7 +12,7 @@ use simplelog::*;
 use std::fs::OpenOptions;
 use util::{run, run_offline};
 
-const CRATESDIR:&str = "/media/loancold/HardDisk/ProjectInDisk/crate_downloader/on_process";
+const CRATEDIR: &str = "path/to/sourse_code";
 
 fn main() {
     CombinedLogger::init(vec![
@@ -36,7 +36,6 @@ fn main() {
     ])
     .unwrap();
 
-    // run(1, "undone")
-    run_offline(20, "undone", CRATESDIR)
-    // run_imcomplete("undone")
+    // run(5, "undone")
+    run_offline(20, "undone", CRATEDIR)
 }

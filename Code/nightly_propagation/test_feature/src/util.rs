@@ -1,7 +1,7 @@
 use downloader::{Download, Downloader};
 use flate2::read::GzDecoder;
 use lazy_static::lazy_static;
-use postgres::{Client};
+use postgres::Client;
 use regex::Regex;
 use tar::Archive;
 use walkdir::WalkDir;
@@ -43,10 +43,9 @@ pub fn download_info() {
 
     let mut dls = Vec::new();
 
-    for ver in 0..=62 {
+    for ver in 0..=67 {
         dls.push(Download::new(&format!(
-            "https://github.com/rust-lang/rust/archive/refs/tags/1.{}.0.tar.gz",
-            ver
+            "https://github.com/rust-lang/rust/archive/refs/tags/1.{ver}.0.tar.gz",
         )));
     }
 
@@ -64,7 +63,6 @@ pub fn extract_info(ver: i32, multi_status_features: &mut HashSet<String>) -> Fe
     }
 
     println!("Processing {}", ver_str);
-
 
     let lang_feature = extract_lang_feature(ver);
     let lib_feature = extract_lib_feature(ver, multi_status_features);
@@ -162,11 +160,11 @@ fn extract_lang_feature(ver: i32) -> Vec<Feature> {
                 }
             }
         }
-        39..=63 => {
+        39..=67 => {
             let pre_path = match ver {
                 39..=40 => "src/libsyntax/feature_gate",
                 41..=47 => "src/librustc_feature",
-                48..=63 => "compiler/rustc_feature/src",
+                48..=67 => "compiler/rustc_feature/src",
                 _ => unreachable!(),
             };
 
@@ -247,7 +245,11 @@ fn map_lib_features(contents: String, mf: &mut dyn FnMut(Result<Feature, &str>))
         becoming_feature = None;
         if line.contains("rustc_const_unstable(") {
             // `const fn` features are handled specially.
-            let feature_name = match find_attr_val(line, "feature") {
+            let feature_name = match find_attr_val(line, "feature").or_else(|| {
+                iter_lines
+                    .peek()
+                    .and_then(|next| find_attr_val(next.1, "feature"))
+            }) {
                 Some(name) => name,
                 None => err!("malformed stability attribute: missing `feature` key"),
             };
@@ -261,7 +263,11 @@ fn map_lib_features(contents: String, mf: &mut dyn FnMut(Result<Feature, &str>))
 
         if line.contains("rustc_const_stable(") {
             // `const fn` features are handled specially.
-            let feature_name = match find_attr_val(line, "feature") {
+            let feature_name = match find_attr_val(line, "feature").or_else(|| {
+                iter_lines
+                    .peek()
+                    .and_then(|next| find_attr_val(next.1, "feature"))
+            }) {
                 Some(name) => name,
                 None => err!("malformed stability attribute: missing `feature` key"),
             };
@@ -316,7 +322,6 @@ fn find_attr_val<'a>(line: &'a str, attr: &str) -> Option<&'a str> {
     r.captures(line).and_then(|c| c.get(1)).map(|m| m.as_str())
 }
 
-
 impl From<String> for Status {
     fn from(s: String) -> Self {
         match s.as_str() {
@@ -350,4 +355,3 @@ pub fn prebuild(conn: Arc<Mutex<Client>>) {
         )
         .unwrap();
 }
-

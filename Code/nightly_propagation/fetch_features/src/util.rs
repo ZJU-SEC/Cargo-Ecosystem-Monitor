@@ -20,6 +20,7 @@ use toml::Value;
 use walkdir::WalkDir;
 
 const THREAD_LOAD: i32 = 20;
+const RUSTC: &str = "/home/loancold/Projects/Cargo-Ecosystem-Monitor/rust/build/x86_64-unknown-linux-gnu/stage1/bin/rustc";
 
 struct VersionInfo {
     version_id: i32,
@@ -30,7 +31,6 @@ struct VersionInfo {
 
 // https://crates.io/api/v1/crates/$(crate)/$(version)/download
 
-const RUSTC: &str = "/home/loancold/Projects/Cargo-Ecosystem-Monitor/rust/build/x86_64-unknown-linux-gnu/stage1/bin/rustc";
 
 #[allow(unused)]
 pub fn run(workers: usize, todo_status: &str) {
