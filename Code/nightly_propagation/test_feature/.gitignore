@@ -1,6 +1,7 @@
-target/*
+target
 do_test
 do_test.rs
 Cargo.lock
-on_process/*
-__pycache__/*
+on_process
+__pycache__
+figure.pdf
