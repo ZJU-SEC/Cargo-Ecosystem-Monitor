@@ -2,3 +2,4 @@ Cargo.lock
 fetch_crates.log
 target/*
 on_process/*
+lib.rs
