@@ -104,3 +104,8 @@ The complete output follows json style, and is quite complicated. I use python s
 > version
 > workspace_root
 > metadata
+
+
+### Execute our projects in server using SSH
+
+To avoid terminating the execution after SSH termination, you should use `nohup` by using shell command `nohup cargo run >&/dev/null&`. The `/dev/null` is used to avoid catching output, because it occupies large number of storage.

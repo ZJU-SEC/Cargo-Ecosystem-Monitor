@@ -1,4 +1,4 @@
-#  Nightly feature propagation
+# Nightly feature propagation
 
 [TOC]
 

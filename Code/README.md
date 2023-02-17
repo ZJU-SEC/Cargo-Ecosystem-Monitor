@@ -1,6 +1,6 @@
 # Code
 
-This directory contains multiple sub-projects for various analysis of the Rust ecosystem.
+This directory contains multiple sub-projects for various analysis of the Rust ecosystem. All work should be done after the env build following the root directory guide.
 
 - `accuracy_evaluation`: Evaluate the accuracy of our dependency resolution tool. Should be done after project `rust_deps`.
 - `advisory_scanner`: Scan the advisory impact range across the Rust ecosystem according to provided advisory data in json file. Should be done after project `rust_deps`.
