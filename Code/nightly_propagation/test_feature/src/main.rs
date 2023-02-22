@@ -1,23 +1,26 @@
 #![feature(exclusive_range_pattern)]
 
-use postgres::{Client, NoTls};
-use std::{sync::{Arc, Mutex}, collections::HashSet};
-use util::{extract_info, prebuild};
-
-#[allow(unused)]
-use util::download_info;
-
-
 extern crate downloader;
 extern crate flate2;
 extern crate lazy_static;
 extern crate regex;
+extern crate simplelog;
 extern crate tar;
 extern crate walkdir;
 
-
 mod util;
 
+use log::warn;
+use postgres::{Client, NoTls};
+use simplelog::*;
+use std::{
+    sync::{Arc, Mutex},
+    fs::OpenOptions,
+};
+
+#[allow(unused)]
+use util::download_info;
+use util::{extract_info, prebuild};
 
 /*
 check:
@@ -71,10 +74,28 @@ fn main() {
         .unwrap(),
     ));
 
+    // Prepare log file
+    CombinedLogger::init(vec![
+        TermLogger::new(
+            LevelFilter::Warn,
+            simplelog::Config::default(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        ),
+        WriteLogger::new(
+            LevelFilter::Warn,
+            simplelog::Config::default(),
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open("./feature_lifetime.log")
+                .unwrap(),
+        ),
+    ])
+    .unwrap();
+
     prebuild(Arc::clone(&conn));
 
-    let mut multi_status_features = HashSet::new();
-    
     for v in 0..=67 {
         conn.lock()
             .unwrap()
@@ -84,12 +105,16 @@ fn main() {
             )
             .unwrap_or_default();
 
-        let res = extract_info(v, &mut multi_status_features);
+        let res = extract_info(v);
         let mut features = vec![];
 
         features.extend(res.lang);
         features.extend(res.lib);
 
+        warn!("[warn] multi status features: {:?}", res.mul_errors);
+        warn!("[warn] nr error features: {:?}", res.nr_errors);
+
+        // continue;
         features
             .into_iter()
             .map(|feat| {
@@ -97,20 +122,30 @@ fn main() {
                     .lock()
                     .unwrap()
                     .query(
-                        &format!("SELECT * FROM feature_timeline WHERE name = '{}'", feat.name),
+                        &format!(
+                            "SELECT * FROM feature_timeline WHERE name = '{}'",
+                            feat.name
+                        ),
                         &[],
                     )
                     .expect("Check exist fails")
                     .is_empty();
+
+                // let status = if feat.rustc_const {
+                //     format!("{} (rustc_const)", feat.status.to_string())
+                // } else {
+                //     feat.status.to_string()
+                // };
+
+                let status = feat.status.to_string();
+
                 if exist {
                     conn.lock()
                         .unwrap()
                         .query(
                             &format!(
                                 "UPDATE feature_timeline SET v1_{}_0 = '{}' WHERE name = '{}'",
-                                v,
-                                feat.status.to_string(),
-                                feat.name
+                                v, status, feat.name
                             ),
                             &[],
                         )
@@ -121,9 +156,7 @@ fn main() {
                         .query(
                             &format!(
                                 "INSERT INTO feature_timeline (name, v1_{}_0) VALUES ('{}', '{}')",
-                                v,
-                                feat.name,
-                                feat.status.to_string()
+                                v, feat.name, status
                             ),
                             &[],
                         )
@@ -132,138 +165,48 @@ fn main() {
             })
             .count();
     }
-
-    // println!("MultiStatus features: {:?}", multi_status_features);
 }
-
 
 /*
 #[test]
 fn test() {
-    use std::path::Path;
-    use tidy::features::check;
-    let version = 48;
+    let mut normal_set_all = HashSet::new();
+    let mut rc_set_all = HashSet::new();
+    let mut multi_status_features_all = HashSet::new();
 
-    run_my(version);
-    run_tidy(version);
+    for v in 0..=67 {
+        let mut multi_status_features = HashSet::new();
+        let res = extract_info(v, &mut multi_status_features);
 
-    fn run_my(version: i32) {
-        let my_feats = extract_info(version);
+        let mut features = vec![];
 
-        let conn = Arc::new(Mutex::new(
-            Client::connect(
-                "host=localhost dbname=crates user=postgres password=postgres",
-                NoTls,
-            )
-            .unwrap(),
-        ));
+        features.extend(res.lang);
+        features.extend(res.lib);
 
-        conn.lock()
-            .unwrap()
-            .query(
-                "CREATE TABLE IF NOT EXISTS public.feature_status_my (
-        name VARCHAR,
-        status VARCHAR,
-        type VARCHAR
-    )",
-                &[],
-            )
-            .unwrap();
+        let mut normal_set = HashSet::new();
+        let mut rc_set = HashSet::new();
 
-        for feat in my_feats.lang {
-            conn.lock()
-                .unwrap()
-                .query(
-                    &format!(
-                        "INSERT INTO feature_status_my VALUES ('{}', '{}', '{}')",
-                        feat.name,
-                        feat.status.to_string(),
-                        "lang"
-                    ),
-                    &[],
-                )
-                .unwrap();
+        for feat in features {
+            if feat.rustc_const {
+                rc_set.insert(feat.name);
+            } else {
+                normal_set.insert(feat.name);
+            }
         }
 
-        for feat in my_feats.lib {
-            conn.lock()
-                .unwrap()
-                .query(
-                    &format!(
-                        "INSERT INTO feature_status_my VALUES ('{}', '{}', '{}')",
-                        feat.name,
-                        feat.status.to_string(),
-                        "lib"
-                    ),
-                    &[],
-                )
-                .unwrap();
-        }
+        let x = normal_set.intersection(&rc_set);
+        println!("NR Error: {:?}", x);
+        println!("MultiStatus Error: {:?}", multi_status_features);
+
+        normal_set_all.extend(normal_set);
+        rc_set_all.extend(rc_set);
+        multi_status_features_all.extend(multi_status_features);
     }
 
-    fn run_tidy(version: i32) {
-        let src_path = format!("on_process/rust-1.{}.0/src", version);
-        let compiler_path = format!("on_process/rust-1.{}.0/compiler", version);
-        let lib_path = format!("on_process/rust-1.{}.0/library", version);
-        let mut flag = false;
+    let x = normal_set_all.intersection(&rc_set_all);
+    println!("NR Error All: {:?}", x);
+    println!("MultiStatus Error All: {:?}", multi_status_features_all);
 
-        let tidy_feats = check(
-            Path::new(&src_path),
-            Path::new(&compiler_path),
-            Path::new(&lib_path),
-            &mut flag,
-            false,
-        );
-
-        let conn = Arc::new(Mutex::new(
-            Client::connect(
-                "host=localhost dbname=crates user=postgres password=postgres",
-                NoTls,
-            )
-            .unwrap(),
-        ));
-
-        conn.lock()
-            .unwrap()
-            .query(
-                "CREATE TABLE IF NOT EXISTS public.feature_status_tidy (
-            name VARCHAR,
-            status VARCHAR,
-            type VARCHAR
-            )",
-                &[],
-            )
-            .unwrap();
-        
-        for feat in tidy_feats.lang {
-            conn.lock()
-                .unwrap()
-                .query(
-                    &format!(
-                        "INSERT INTO feature_status_tidy VALUES ('{}', '{}', '{}')",
-                        feat.0,
-                        feat.1.level.to_string(),
-                        "lang"
-                    ),
-                    &[],
-                )
-                .unwrap();
-        }
-
-        for feat in tidy_feats.lib {
-            conn.lock()
-                .unwrap()
-                .query(
-                    &format!(
-                        "INSERT INTO feature_status_tidy VALUES ('{}', '{}', '{}')",
-                        feat.0,
-                        feat.1.level.to_string(),
-                        "lib"
-                    ),
-                    &[],
-                )
-                .unwrap();
-        }
-    }
 }
+
 */

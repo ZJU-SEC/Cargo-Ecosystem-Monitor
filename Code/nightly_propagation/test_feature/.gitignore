@@ -4,4 +4,5 @@ do_test.rs
 Cargo.lock
 on_process
 __pycache__
-figure.pdf
+feature_lifetime.log
+*.pdf
