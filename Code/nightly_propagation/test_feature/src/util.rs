@@ -16,11 +16,14 @@ use std::sync::{Arc, Mutex};
 pub struct Feature {
     pub name: String,
     pub status: Status,
+    pub rustc_const: bool,
 }
 
 pub struct Features {
     pub lang: Vec<Feature>,
     pub lib: Vec<Feature>,
+    pub mul_errors: HashSet<String>,
+    pub nr_errors: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +55,7 @@ pub fn download_info() {
     downloader.download(&dls).expect("downloader broken");
 }
 
-pub fn extract_info(ver: i32, multi_status_features: &mut HashSet<String>) -> Features {
+pub fn extract_info(ver: i32) -> Features {
     let ver_str = format!("1.{}.0", ver);
     let data = File::open(&format!("on_process/{}.tar.gz", ver_str)).expect("Open file failed");
     let mut archive = Archive::new(GzDecoder::new(data));
@@ -65,17 +68,20 @@ pub fn extract_info(ver: i32, multi_status_features: &mut HashSet<String>) -> Fe
     println!("Processing {}", ver_str);
 
     let lang_feature = extract_lang_feature(ver);
-    let lib_feature = extract_lib_feature(ver, multi_status_features);
+    let (lib_feature, mul, nr) = extract_lib_feature(ver);
 
     Features {
         lang: lang_feature,
         lib: lib_feature,
+        mul_errors: mul,
+        nr_errors: nr,
     }
 }
 
-fn extract_lib_feature(ver: i32, multi_status_features: &mut HashSet<String>) -> Vec<Feature> {
+fn extract_lib_feature(ver: i32) -> (Vec<Feature>, HashSet<String>, HashSet<String>) {
     let mut lib_features = HashMap::new();
-    let mut mulfeatures = HashSet::new();
+    let mut mul_status = HashSet::new();
+    let mut nr_error = HashSet::new();
 
     let ver_str = format!("1.{}.0", ver);
     let dir = WalkDir::new(format!("on_process/rust-{}", ver_str)).into_iter();
@@ -101,21 +107,21 @@ fn extract_lib_feature(ver: i32, multi_status_features: &mut HashSet<String>) ->
             if let Ok(feature) = res {
                 let f = feature.clone();
                 let entry = lib_features.entry(feature.name.clone()).or_insert(feature);
+                // Inconsistent status
                 if entry.status != f.status {
                     entry.status = Status::Active;
-                    mulfeatures.insert(f.name);
+                    mul_status.insert(f.name.clone());
+                }
+                // Inconsistent rustc_const
+                if entry.rustc_const != f.rustc_const {
+                    entry.rustc_const = true;
+                    nr_error.insert(f.name);
                 }
             }
         });
     }
 
-    if !mulfeatures.is_empty() {
-        println!("[error]: {:?}", mulfeatures);
-    }
-
-    multi_status_features.extend(mulfeatures);
-
-    lib_features.drain().into_iter().map(|(_, v)| v).collect()
+    (lib_features.drain().into_iter().map(|(_, v)| v).collect(), mul_status, nr_error)
 }
 
 fn extract_lang_feature(ver: i32) -> Vec<Feature> {
@@ -149,6 +155,7 @@ fn extract_lang_feature(ver: i32) -> Vec<Feature> {
                     features.push(Feature {
                         name: cap[1].to_string(),
                         status: cap[2].to_ascii_lowercase().into(),
+                        rustc_const: false,
                     });
                 }
             } else {
@@ -156,6 +163,7 @@ fn extract_lang_feature(ver: i32) -> Vec<Feature> {
                     features.push(Feature {
                         name: cap[2].to_string(),
                         status: cap[1].to_ascii_lowercase().into(),
+                        rustc_const: false,
                     });
                 }
             }
@@ -188,6 +196,7 @@ fn extract_lang_feature(ver: i32) -> Vec<Feature> {
                 features.push(Feature {
                     name: cap[2].to_string(),
                     status: cap[1].to_ascii_lowercase().into(),
+                    rustc_const: false,
                 });
             }
         }
@@ -200,7 +209,7 @@ fn extract_lang_feature(ver: i32) -> Vec<Feature> {
 fn map_lib_features(contents: String, mf: &mut dyn FnMut(Result<Feature, &str>)) {
     // This is an early exit -- all the attributes we're concerned with must contain this:
     // * rustc_const_unstable(
-    // * rustc_const_stable()
+    // * rustc_const_stable(
     // * unstable(
     // * stable(
     if !contents.contains("stable(") {
@@ -256,6 +265,7 @@ fn map_lib_features(contents: String, mf: &mut dyn FnMut(Result<Feature, &str>))
             let feature = Feature {
                 name: feature_name.to_string(),
                 status: Status::Active,
+                rustc_const: true,
             };
             mf(Ok(feature));
             continue;
@@ -274,6 +284,7 @@ fn map_lib_features(contents: String, mf: &mut dyn FnMut(Result<Feature, &str>))
             let feature = Feature {
                 name: feature_name.to_string(),
                 status: Status::Accepted,
+                rustc_const: true,
             };
             mf(Ok(feature));
             continue;
@@ -299,6 +310,7 @@ fn map_lib_features(contents: String, mf: &mut dyn FnMut(Result<Feature, &str>))
         let feature = Feature {
             name: feature_name.to_string(),
             status: level,
+            rustc_const: false,
         };
 
         if line.contains(']') {
