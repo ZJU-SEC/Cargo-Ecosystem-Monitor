@@ -111,8 +111,8 @@ fn main() {
         features.extend(res.lang);
         features.extend(res.lib);
 
-        warn!("[warn] multi status features: {:?}", res.mul_errors);
-        warn!("[warn] nr error features: {:?}", res.nr_errors);
+        warn!("[warn] nightly-1.{}.0 multi status features: {:?}", v, res.mul_errors);
+        warn!("[warn] nightly-1.{}.0 nr error features: {:?}", v, res.nr_errors);
 
         // continue;
         features
