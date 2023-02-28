@@ -20,6 +20,24 @@ WITH crate_newest_version AS
 	ON versions.crate_id = newest_version.crate_id AND versions.created_at = newest_version.created_at ORDER BY crate_id asc)
 SELECT crate_id, newest_version_id, name, version_num, yanked FROM crate_newest_version INNER JOIN crates ON crate_id = id);
 
+
+-- Build Table (After execute projects `test_feature`)
+CREATE TABLE feature_status AS
+    SELECT name, v1_67_0 as status FROM "feature_timeline";
+INSERT INTO feature_status
+    SELECT DISTINCT feature, NULL AS status FROM version_feature_ori WHERE feature NOT IN (SELECT name FROM feature_status);
+
 -- Build View: Version and crate info for every version
 CREATE VIEW versions_with_name as (
         SELECT versions.*, crates.name FROM versions INNER JOIN crates ON versions.crate_id = crates.id);
+
+
+
+
+
+-- Optional: Only executed when needed. Make sure you know what's going to happen.ADD
+-- Re-resolve failed versions.
+UPDATE deps_process_status SET status='undone' WHERE version_id IN (
+    SELECT version_id FROM deps_process_status WHERE status='fail'
+);
+DROP TABLE dep_errors;
