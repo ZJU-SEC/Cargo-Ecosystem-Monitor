@@ -1,3 +1,6 @@
+env:
+	sudo apt install cmake ninja-build
+
 rust:
 	curl https://sh.rustup.rs -sSf | sh
 
