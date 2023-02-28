@@ -4,11 +4,24 @@ This crate is used to evaluate the accuracy of the Resolution Pipeline of "Cargo
 
 1. build your crates postgresql database from Crates.io first. dbname=crates user=postgres password=postgres.
 2. Run project `rust_deps` to build table `dep_version`.
-3. In step 2, you need to set .cargo environment to specify certain cargo index cache. In this project, you also need to do so, so that standard benchmark uses the same index.
+3. In step 2, you need to set `.cargo` environment to specify certain cargo index cache. In this project, you also need to do so, so that standard benchmark uses the same index.
+   1. Override configuration to file `~/.cargo/config.toml` with 
+  ```Rust
+  [net]
+  git-fetch-with-cli = true
+
+  [source.cargo_ecosystem_monitor]
+  registry = "file:///absolute/path/to/crates.io-index/dir" 
+
+  [source.crates-io]
+  replace-with = "cargo_ecosystem_monitor"
+  ```
 4. Run scripts `prebuild.sql` to build neccesary tables. 
 5. Run `cargo run --bin benchmark_dataset` under this project. This will automatically generate dataset under directory `output`.
 6. Run `cargo run --bin pipeline_evaluation` under this project. This will automatically generate pipeline resolution results under directory `output`, and also store comparison results.
 7. Run `cargo run --bin results_summary` under this project. This will automatically analyze comparison results and print them in command line.
+
+WARNING: As it override your local Cargo configuration, you should not do anything related to Rust and Cargo to avoid unexpected behavior when running this program or use this configuration! Reset Cargo configuration (remove our `~/.cargo/config.toml` file) after execution. 
 
 When re-run the program, you have to manually clear all the cache data:
 - Delete directory `output` to avoid reconsidering duplicate crates in results summary.
