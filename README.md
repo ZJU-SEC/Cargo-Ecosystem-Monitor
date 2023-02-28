@@ -41,7 +41,7 @@ There are sub-projects under our projects. Also, they are loosely or closely con
 2. Import data and compile code. 
    1. Get to website [crates.io](https://crates.io/data-access) and follows Step 2 of The `README.md` in the gz package, which tells you how to set up your DB. You should setup your database called 'crates'.
    2. The directory `crates.io-index` points to the index of crates.io. The index of crates should be the same with our database. As a result, we need to change checkout the git commits to meet the time of our database. For example, we download crates.db named `2023-01-11-020041`, we need to checkout the commits to or near 2023-01-11 02:00:41.
-   3. Import modifed Rustc codes under directory `rust`, and build Rustc through the guide in the README file.
+   3. Import modifed Rustc codes under directory `rust`, and build Rustc through the guide in the README file. Find the Rustc target binary for later usage.
 3. Now you've setup your data and tools. You may need further environment setup under specific projects, which is also detailedly described in directory `code`. Refer to it for further analysis.
 
 
