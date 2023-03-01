@@ -1,7 +1,10 @@
+use cargo::core::compiler::{CompileKind, RustcTargetData};
+use cargo::core::dependency::DepKind;
 use cargo::core::registry::PackageRegistry;
-use cargo::core::resolver::{CliFeatures, HasDevUnits, ResolveOpts};
-use cargo::core::{PackageIdSpec, Shell, Summary, Workspace};
-use cargo::ops;
+use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits, ResolveOpts};
+use cargo::core::{PackageIdSpec, Workspace, Shell, Package, PackageId, Summary};
+use cargo::ops::tree::{Target, EdgeKind, Prefix, Charset};
+use cargo::ops::{self, tree::TreeOptions, Packages};
 use cargo::util::Config;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -18,6 +21,8 @@ use crossbeam::channel::{self};
 use log::{error, info, warn};
 use postgres::{Client, NoTls};
 
+use crate::graph::{self, Node};
+
 struct VersionInfo {
     version_id: i32,
     crate_id: i32,
@@ -25,7 +30,7 @@ struct VersionInfo {
     num: String,
 }
 
-const THREAD_DATA_SIZE: i64 = 500;
+const THREAD_DATA_SIZE: i64 = 50;
 const RERESOLVE_DATA_SIZE: i64 = 20;
 
 
@@ -668,6 +673,7 @@ fn format_virt_toml_file(name: &String, version_num: &String, features: &Vec<&st
         r#"[package]
 name = "dep"
 version = "0.1.0"
+edition = "2021"
 [dependencies]"#,
     );
     file.push('\n');
@@ -684,11 +690,341 @@ version = "0.1.0"
     file
 }
 
+
+// fn fix_resolve(path: &str, name: &str) -> Result<()> {
+//     let config = Config::default()?;
+
+//     let ws = Workspace::new(&Path::new(&format!("{path}/Cargo.toml")), &config)?;
+//     let requested_targets = Vec::new();
+//     let requested_kinds = CompileKind::from_requested_targets(ws.config(), &requested_targets)?;
+//     let target_data = RustcTargetData::new(&ws, &requested_kinds)?;
+
+//     let specs = PackageIdSpec::query_str(name, ws.members().map(|pkg| pkg.package_id()))?;
+//     let specs = [PackageIdSpec::from_package_id(specs)];
+
+//     let ws_resolve = ops::resolve_ws_with_opts(
+//         &ws,
+//         &target_data,
+//         &requested_kinds,
+//         &CliFeatures::new_all(false),
+//         &specs,
+//         HasDevUnits::Yes,
+//         ForceAllTargets::No,
+//     )?;
+
+//     let package_map: HashMap<PackageId, &Package> = ws_resolve
+//         .pkg_set
+//         .packages()
+//         .map(|pkg| (pkg.package_id(), pkg))
+//         .collect();
+
+//     // Default tree options
+//     let cli_features = CliFeatures::new_all(false);
+//     let packages = Packages::Default;
+//     let target = Target::Host;
+//     let mut edge_kinds = HashSet::new();
+//     edge_kinds.insert(EdgeKind::Dep(DepKind::Normal));
+//     edge_kinds.insert(EdgeKind::Dep(DepKind::Build));
+//     edge_kinds.insert(EdgeKind::Dep(DepKind::Development));
+//     let invert = vec![];
+//     let pkgs_to_prune = vec![];
+//     let prefix = Prefix::Indent;
+//     let no_dedupe = false;
+//     let duplicates = false;
+//     let charset = Charset::Utf8;
+//     let format = "{p}".to_string();
+//     let graph_features = false;
+//     let max_display_depth = u32::MAX;
+//     let no_proc_macro = false;
+
+//     let opts = TreeOptions {
+//         cli_features,
+//         packages,
+//         target,
+//         edge_kinds,
+//         invert,
+//         pkgs_to_prune,
+//         prefix,
+//         no_dedupe,
+//         duplicates,
+//         charset,
+//         format,
+//         graph_features,
+//         max_display_depth,
+//         no_proc_macro,
+//     };
+
+
+//     let mut g = graph::build(
+//         &ws,
+//         &ws_resolve.targeted_resolve,
+//         &ws_resolve.resolved_features,
+//         &specs,
+//         &CliFeatures::new_all(false),
+//         &target_data,
+//         &requested_kinds,
+//         package_map,
+//         &opts,
+//     )?;
+
+//     println!("{:?}", g.nodes);
+
+//     Ok(())
+// }
+
+// Write `dependencies` to `file` in csv format, sorted.
+pub fn write_dependency_file_sorted(path_string: String, dependencies: &HashMap<String, HashSet<String>>){
+    let mut content:Vec<String> = Vec::new();
+    let path = Path::new(path_string.as_str());
+    let display = path.display();   
+    let mut file = match File::create(&path) {
+        Err(why) => panic!("couldn't create {}: {}", display, why),
+        Ok(file) => file,
+    };
+    for(crate_name, versions) in dependencies {
+        for version in versions {
+            let dep_name = format!("{},", crate_name);
+            let dep_ver = format!("{}", version);
+            let line = dep_name+ &dep_ver + "\n";
+            content.push(line);
+        }
+    }
+    content.sort();
+    for line in content {
+        if let Err(why) = file.write_all(line.as_bytes()) {
+            panic!("couldn't write to {}: {}", path.display(), why);
+        }
+    }
+}
+
+#[test]
+fn resolve_test_fixed() -> Result<()> {
+    let conn = Arc::new(Mutex::new(
+        Client::connect(
+            "host=localhost port=5434 dbname=crates user=postgres password=postgres",
+            NoTls,
+        )
+        .unwrap(),
+    ));
+    let ver_name_table = Arc::new(get_ver_name_table(Arc::clone(&conn)));
+    
+    let thread_id = 999;
+    let name = String::from("caisin");
+    let num = String::from("0.1.57");
+    let mut features = Vec::new();
+
+    // Create virtual env by creating toml file
+    // Fill toml contents
+    let current_path = current_dir()?;
+    let dep_filename = format!("dep{}.toml", thread_id);
+    let current_toml_path = format!("{}/{}", current_path.display(), dep_filename);
+
+    // Create virtual env by setting correct workspace
+    let file = format_virt_toml_file(&name, &num, &features);
+    // println!("file: {}", file);
+    File::create(&current_toml_path)?
+        .write_all(file.as_bytes())
+        .expect("Write failed");
+
+    // Pre Resolve: To find all possible dependencies
+    let config = Config::new(
+        Shell::new(),
+        env::current_dir()?,
+        format!("{}/job{}", current_path.to_str().unwrap(), thread_id).into(),
+    );
+    let mut ws = Workspace::new(&Path::new(&current_toml_path), &config).unwrap();
+    let mut registry = PackageRegistry::new(ws.config()).unwrap();
+    let requested_targets = Vec::new();
+    let requested_kinds = CompileKind::from_requested_targets(ws.config(), &requested_targets)?;
+    let target_data = RustcTargetData::new(&ws, &requested_kinds)?;
+    let specs = PackageIdSpec::query_str("dep", ws.members().map(|pkg| pkg.package_id()))?;
+    let specs = [PackageIdSpec::from_package_id(specs)];
+
+    let ws_resolve = ops::resolve_ws_with_opts(
+        &ws,
+        &target_data,
+        &requested_kinds,
+        &CliFeatures::new_all(true),
+        &specs,
+        HasDevUnits::No,
+        ForceAllTargets::Yes,
+    )?;
+    let package_map: HashMap<PackageId, &Package> = ws_resolve
+        .pkg_set
+        .packages()
+        .map(|pkg| (pkg.package_id(), pkg))
+        .collect();
+
+    // Double Resolve: Stripe unuseful packages.
+    // Configurations
+    let cli_features = CliFeatures::new_all(true);
+    let packages = Packages::Default;
+    let target = Target::Host;
+    let mut edge_kinds = HashSet::new();
+    edge_kinds.insert(EdgeKind::Dep(DepKind::Normal));
+    edge_kinds.insert(EdgeKind::Dep(DepKind::Build));
+    // edge_kinds.insert(EdgeKind::Dep(DepKind::Development));
+    let invert = vec![];
+    let pkgs_to_prune = vec![];
+    let prefix = Prefix::Indent;
+    let no_dedupe = false;
+    let duplicates = false;
+    let charset = Charset::Utf8;
+    let format = "{p}".to_string();
+    let graph_features = false;
+    let max_display_depth = u32::MAX;
+    let no_proc_macro = false;
+    // Dependency Strip
+    let opts = TreeOptions {
+        cli_features,
+        packages,
+        target,
+        edge_kinds,
+        invert,
+        pkgs_to_prune,
+        prefix,
+        no_dedupe,
+        duplicates,
+        charset,
+        format,
+        graph_features,
+        max_display_depth,
+        no_proc_macro,
+    };
+    let mut g = graph::build(
+        &ws,
+        &ws_resolve.targeted_resolve,
+        &ws_resolve.resolved_features,
+        &specs,
+        &CliFeatures::new_all(false),
+        &target_data,
+        &requested_kinds,
+        package_map,
+        &opts,
+    )?;
+
+    match &g.nodes[0] {
+        Node::Package{package_id, features, ..} => {
+            println!("node0: {:#?}", package_id) // Final dependency graph
+        },
+        _ => (),
+    };
+
+    // if let Node::Package(pack) = g.nodes[0] {
+    //     println!("node0: {:#?}", pack); // Final dependency graph
+        
+    // }
+    // println!("node0: {:#?}", g.nodes[0]); // Final dependency graph
+    // println!("nodes: {:#?}", g.nodes); // Final dependency graph
+    // println!("{:#?}", g.edges); // Final dependency graph
+
+    // for node in g.nodes {
+    //     println!("{:#?}", node); // Final dependency graph
+    // }
+
+    // 3. Translate version info into id.
+    let mut map = HashMap::new();
+    let mut set = HashSet::new();
+    for node in &g.nodes {
+        let pkg = match &node {
+            Node::Package{package_id, features, ..} => {
+                package_id
+            },
+            _ => continue,
+        };
+        map.insert(
+            (pkg.name().to_string(), pkg.version().to_string()),
+            get_version_by_name_version_test(
+                Arc::clone(&ver_name_table),
+                &pkg.name().to_string(),
+                &pkg.version().to_string(),
+            )?,
+        );
+    }
+    // println!("{:#?}", map);
+
+    // 4. Resolve the dep tree.
+    // let root = g.package_id_for_index(0);
+    // let mut v = VecDeque::new();
+    // let mut level = 1;
+    // v.extend([Some(root), None]);
+
+    // while let Some(next) = v.pop_front() {
+    //     if let Some(pkg) = next {
+    //         for (pkg, _) in resolve.deps(pkg) {
+    //             set.insert((
+    //                 map[&(pkg.name().to_string(), pkg.version().to_string())],
+    //                 level,
+    //             ));
+    //             v.push_back(Some(pkg));
+    //         }
+    //     } else {
+    //         level += 1;
+    //         if !v.is_empty() {
+    //             v.push_back(None)
+    //         }
+    //     }
+    // }
+    let mut dependencies:HashMap<String, HashSet<String>> = HashMap::new();
+    let mut traversed = HashSet::<usize>::new();
+    let edges_vec = &g.edges;
+    let root = 0;
+    let mut v = VecDeque::new();
+    let mut level = 1;
+    v.extend([Some(0), None]);
+
+    while let Some(next) = v.pop_front() {
+        if let Some(pkg) = next {
+            if !traversed.contains(&pkg){
+                traversed.insert(pkg);
+            }
+            // print!("{} -> ", pkg);
+            for edges in edges_vec {
+                for (dep_type, deps) in &edges.0 {
+                    for dep in deps {
+                        // print!("{}, ", dep);
+                        let pkg = g.package_id_for_index(*dep);
+                        if !traversed.contains(dep) && !set.contains(&(
+                            map[&(pkg.name().to_string(), pkg.version().to_string())],
+                            level,
+                        )) {
+                            v.push_back(Some(*dep));
+                        }
+                        else{
+                            set.insert((
+                                map[&(pkg.name().to_string(), pkg.version().to_string())],
+                                level,
+                            ));
+                            let crate_name = dependencies.entry(pkg.name().to_string()).or_insert(HashSet::new());
+                            (*crate_name).insert(pkg.version().to_string());
+                        }
+                    }
+                }
+            }
+            // print!("\n");
+        } else {
+            level += 1;
+            println!("level:{}", level);
+            if !v.is_empty() {
+                v.push_back(None)
+            }
+        }
+    }
+    // println!("{:#?}", set);
+    let path_string = format!("{}-{}.csv", name, num);
+    write_dependency_file_sorted(path_string, &dependencies);
+
+    Ok(())
+}
+
+
+
+
 #[test]
 fn resolve_test() -> io::Result<()> {
     let conn = Arc::new(Mutex::new(
         Client::connect(
-            "host=localhost dbname=crates user=postgres password=postgres",
+            "host=localhost port=5434 dbname=crates user=postgres password=postgres",
             NoTls,
         )
         .unwrap(),
@@ -696,10 +1032,10 @@ fn resolve_test() -> io::Result<()> {
     let ver_name_table = Arc::new(get_ver_name_table(Arc::clone(&conn)));
     
     println!("{:#?}", get_version_by_name_version_test(Arc::clone(&ver_name_table), "tin-summer", "1.21.3"));
-    return Ok(());
+    // return Ok(());
     let thread_id = 999;
-    let name = String::from("tin-summer");
-    let num = String::from("1.21.3");
+    let name = String::from("caisin");
+    let num = String::from("0.1.57");
     let mut features = Vec::new();
     // let features:Vec<String> = Vec::new();
 
@@ -708,6 +1044,7 @@ fn resolve_test() -> io::Result<()> {
     let current_path = current_dir()?;
     let dep_filename = format!("dep{}.toml", thread_id);
     let current_toml_path = format!("{}/{}", current_path.display(), dep_filename);
+    // let current_toml_path = format!("/home/loancold/projects/Cargo-Ecosystem-Monitor/Code/demo/feature_level_dependency/Cargo.toml");
 
     // Create virtual env by setting correct workspace
     let file = format_virt_toml_file(&name, &num, &features);
@@ -725,7 +1062,7 @@ fn resolve_test() -> io::Result<()> {
     let mut ws = Workspace::new(&Path::new(&current_toml_path), &config).unwrap();
     let mut registry = PackageRegistry::new(ws.config()).unwrap();
     // println!("Workspace: {:?}", ws);
-    ws.set_require_optional_deps(false);
+    ws.set_require_optional_deps(true);
     let resolve = ops::resolve_with_previous(
         &mut registry,
         &ws,
@@ -739,7 +1076,9 @@ fn resolve_test() -> io::Result<()> {
         true,
     )
     .unwrap();
-    // println!("{:#?}", resolve);
+    println!("{:#?}", ws);
+    // return Ok(());
+    println!("{:#?}", resolve);
 
     // Find all `features` including user-defined and optional dependency
     if let Ok(res) = resolve.query(&format!("{}:{}", name, num)) {
@@ -779,22 +1118,22 @@ fn resolve_test() -> io::Result<()> {
     .unwrap();
     println!("{:#?}", resolve);
 
-    {
-        let name = "clang-sys";
-        let num = "1.3.3";
-        let v = format!("{}:{}", name, num);
-        let query_feature = "clang_3_9";
-        let nightly_feature = "THis one";
-        let mut tmp_features:Vec<&str> = Vec::new();
-        if let Ok(res) = resolve.query(&v) {
-            for feature in resolve.features(res) {
-                if feature == query_feature{
-                    tmp_features.push(nightly_feature);
-                }
-            }
-        }
-        println!("{:#?}", tmp_features);
-    }
+    // {
+    //     let R = "clang-sys";
+    //     let num = "1.3.3";
+    //     let v = format!("{}:{}", name, num);
+    //     let query_feature = "clang_3_9";
+    //     let nightly_feature = "THis one";
+    //     let mut tmp_features:Vec<&str> = Vec::new();
+    //     if let Ok(res) = resolve.query(&v) {
+    //         for feature in resolve.features(res) {
+    //             if feature == query_feature{
+    //                 tmp_features.push(nightly_feature);
+    //             }W
+    //         }
+    //     }
+    //     println!("{:#?}", tmp_features);
+    // }
 
     Ok(())
 
