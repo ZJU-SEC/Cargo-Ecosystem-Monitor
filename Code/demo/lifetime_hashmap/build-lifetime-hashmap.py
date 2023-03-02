@@ -6,16 +6,10 @@ import seaborn as sns
 import psycopg2 as pg
 from matplotlib.lines import Line2D
 
-# active accepted removed imcomlete unknown
-# blue   green    red     yellow    grey
-# 0      1         2        3         4
-
 conn = pg.connect(database='crates', user='postgres', password='postgres', port='5434')
-
 cur = conn.cursor()
 cur.execute('SELECT * FROM feature_timeline')
 rows = np.array(cur.fetchall())
-# print(rows.shape[1])
 
 lifetime = rows[:, 1:]
 ruf_name = rows[:, 0]
