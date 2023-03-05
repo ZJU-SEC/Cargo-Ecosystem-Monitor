@@ -180,3 +180,18 @@ ON crate_date > created_at GROUP BY crate_date ORDER BY crate_date ASC;
 
 SELECT crate_date, COUNT(DISTINCT id) FROM versions INNER JOIN tmp_year_month
 ON crate_date > created_at GROUP BY crate_date ORDER BY crate_date ASC;
+
+
+
+-- 7. RUF Remediation Analysis
+-- In project "RUF Remediation Analysis", create RUF impact table <version, RUF>.
+DROP TABLE IF EXISTS tmp_ruf_remediation_analysis;
+CREATE TABLE tmp_ruf_remediation_analysis AS (
+    SELECT DISTINCT id, feature FROM version_feature
+    WHERE feature IS NOT NULL
+);
+INSERT INTO tmp_ruf_remediation_analysis
+    SELECT DISTINCT version_from, feature FROM version_feature 
+    INNER JOIN dep_version ON version_to=id WHERE conds = '' AND feature IS NOT NULL;
+INSERT INTO tmp_ruf_remediation_analysis
+    SELECT  DISTINCT version_from, nightly_feature FROM dep_version_feature;
