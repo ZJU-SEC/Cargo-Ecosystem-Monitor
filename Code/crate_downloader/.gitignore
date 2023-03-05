@@ -3,3 +3,5 @@ target
 benchmark_dataset.log
 Cargo.lock
 nohup.out
+crates_downloader.log
+test

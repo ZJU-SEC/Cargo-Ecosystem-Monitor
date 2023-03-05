@@ -6,4 +6,3 @@ In this project, we will download and decompress all crates source code from cra
 ### Preliminaries
 
 The crate version info are based on DB of our Cargo-Ecosystem-Monitor. Follow the guide in the root directory.
-
