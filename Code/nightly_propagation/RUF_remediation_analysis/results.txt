@@ -1,0 +1,10 @@
+Newest_version
+count 334848
+count_failure 73446
+count_unstable 247392
+count_stable 14010
+All versions
+count 334848
+count_failure 9238
+count_unstable 311219
+count_stable 14391
