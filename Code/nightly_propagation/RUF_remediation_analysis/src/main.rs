@@ -6,6 +6,8 @@ use lifetime::RUSTC_VER_NUM;
 use postgres::{Client, NoTls};
 mod lifetime;
 
+const MAX_RUSTC_VERSION:usize = 63;
+
 fn main() {
     let conn = Arc::new(Mutex::new(
         Client::connect(
@@ -25,7 +27,7 @@ fn main() {
     let mut count_stable = 0;
     for (_ver, ruf_impact) in &ruf_impacts {
         count += 1;
-        let status = get_version_ruf_status(ruf_impact, RUSTC_VER_NUM - 1 , &ruf_lifetime);
+        let status = get_version_ruf_status(ruf_impact, MAX_RUSTC_VERSION , &ruf_lifetime);
         match status {
             "failure" => count_failure += 1,
             "unstable" => count_unstable += 1,
