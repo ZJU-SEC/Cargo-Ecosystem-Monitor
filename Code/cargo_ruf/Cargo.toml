@@ -1,0 +1,13 @@
+[package]
+name = "cargo_ruf"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.69"
+clap = { version = "4.1.8", features = ["derive"] }
+lazy_static = "1.4.0"
+lifetime_hashmap = { path = "./lifetime_hashmap" }
+regex = "1.7.1"
