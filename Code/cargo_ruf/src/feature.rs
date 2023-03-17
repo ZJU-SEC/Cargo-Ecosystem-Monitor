@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    ops::Range,
+    sync::{Arc, Mutex}, cell::RefCell,
 };
 
 use lazy_static::lazy_static;
@@ -10,13 +10,13 @@ lazy_static! {
     static ref LIFETIME: HashMap<&'static str, [&'static str; RUSTC_VER_NUM]> = get_lifetime();
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Feature {
-    name: String,
-    active: HashSet<usize>,
-    accept: HashSet<usize>,
-    removed: HashSet<usize>,
-    unknown: HashSet<usize>,
+    pub name: String,
+    pub active: HashSet<usize>,
+    pub accept: HashSet<usize>,
+    pub removed: HashSet<usize>,
+    pub unknown: HashSet<usize>,
 }
 
 impl Feature {
@@ -58,3 +58,21 @@ impl Feature {
     //     get_ruf_status(&LIFETIME, &self.name, ver).map(|s| s.to_string())
     // }
 }
+
+pub struct FEATURE_STORAGE(Arc<RefCell<HashMap<String, Feature>>>);
+
+impl FEATURE_STORAGE {
+    pub fn new() -> Self {
+        Self(Arc::new(RefCell::new(HashMap::new())))
+    }
+
+    pub fn set(&self, feat: Feature) {
+        self.0.borrow_mut().insert(feat.name.clone(), feat);
+    }
+
+    pub fn get(&self, name: &str) -> Option<Feature> {
+        self.0.borrow().get(name).cloned()
+    }
+}
+
+unsafe impl Sync for FEATURE_STORAGE {}
