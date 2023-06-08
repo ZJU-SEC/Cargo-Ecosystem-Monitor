@@ -1,8 +1,8 @@
-# RUF Remediation Analysis
+# RUF Impact Mitigation Analysis
 
 In this project, we will use our RUF remediation technique to scan the whole Rust ecosystem to analyze how many packges can recover from RUF threats, like compilation failure.
 
-### RUF Remediation Technique
+### Technique
 
 Basically, we will try to choose the compiler version that can support active RUF used by packages, rather than removed or unknown RUF. 
 

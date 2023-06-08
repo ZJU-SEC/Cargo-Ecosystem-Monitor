@@ -6,12 +6,12 @@ use lifetime::RUSTC_VER_NUM;
 use postgres::{Client, NoTls};
 mod lifetime;
 
-const MAX_RUSTC_VERSION:usize = 63;
+const MAX_RUSTC_VERSION:usize = 63; // 1.0.0 -> 1.63.0
 
 fn main() {
     let conn = Arc::new(Mutex::new(
         Client::connect(
-            "host=localhost port=5434 dbname=crates user=postgres password=postgres",
+            "host=localhost dbname=crates user=postgres password=postgres",
             NoTls,
         )
         .unwrap(),
@@ -108,7 +108,7 @@ fn get_ruf_impact(conn: Arc<Mutex<Client>>) -> HashMap<i32, Vec<String>> {
 ///     Return: Worst ruf status. Can be "stable", "unstable" (including "active" and "imcomplete"), "failure" (including "removed" and "unknown").
 fn get_version_ruf_status_all(ruf_impact: &Vec<String>, lifetime_table: &HashMap<&'static str, [&'static str; RUSTC_VER_NUM]> ) -> &'static str{
     let mut final_status = "failure";
-    for i in 0..RUSTC_VER_NUM{
+    for i in 0..(MAX_RUSTC_VERSION + 1){
         let status = get_version_ruf_status(ruf_impact, i, lifetime_table);
         match status {
             "stable" => return "stable",
