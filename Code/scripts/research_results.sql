@@ -68,3 +68,13 @@ SELECT status, COUNT(DISTINCT id) FROM tmp_ruf_impact GROUP BY status;
 SELECT DISTINCT id, status FROM tmp_ruf_impact;
 
 -- Result 3.2 Super Spreaders
+WITH deps AS (
+    SELECT version_to, COUNT(DISTINCT version_from) as dependents
+    FROM dep_version
+    WHERE version_to IN(
+        SELECT id FROM version_feature INNER JOIN feature_status 
+        ON name=feature WHERE conds = '' AND feature != 'no_feature_used' AND status = 'removed'
+    ) GROUP BY version_to
+)
+SELECT deps.*, crate_id, num ,name
+FROM deps INNER JOIN versions_with_name ON id=version_to ORDER BY dependents DESC;
