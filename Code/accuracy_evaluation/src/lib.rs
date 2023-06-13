@@ -133,10 +133,10 @@ const DEBUGDIR:&str = "debug";
 /// 6. Dependency Analysis results
 /// 7. Pipeline Resolve Error, if exists.
 fn display_full_information_of_crate() -> Result<()>{
-    let name = "windows-sys";
-    let version = "0.36.1";
-    // let name = "slog-term";
-    // let version = "2.9.0";
+    // let name = "windows-sys";
+    // let version = "0.36.1";
+    let name = "slog-term";
+    let version = "2.9.0";
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -221,25 +221,26 @@ fn display_full_information_of_crate() -> Result<()>{
             contents.replace("[package]", "[package]\nedition = \"2021\"")
         };
         // Replace rustc version
-        let re = Regex::new(r#"rust-version = ".+"#).unwrap();
-        let mut rustc_version:String = String::new();
-        for cap in re.captures_iter(&contents) {
-            rustc_version = cap[0].to_string();
-        }
+        // let re = Regex::new(r#"rust-version = ".+"#).unwrap();
+        // let mut rustc_version:String = String::new();
+        // for cap in re.captures_iter(&contents) {
+        //     rustc_version = cap[0].to_string();
+        // }
         
-        let new_content = if !rustc_version.is_empty(){
-            contents.replace(&rustc_version, r#""#)
-        }
-        else{
-            contents
-        };
+        // let new_content = if !rustc_version.is_empty(){
+        //     contents.replace(&rustc_version, r#""#)
+        // }
+        // else{
+        //     contents
+        // };
         // println!("new_content : {}", new_content);
 
         
         let mut toml = File::options().write(true).
             open(Path::new(&format!("{}/{}/{}-{}/Cargo.toml", DEBUGDIR, name, name, version)))?;
         toml.set_len(0)?;
-        toml.write_all(new_content.as_bytes())?;
+        toml.write_all(contents.as_bytes())?;
+        // toml.write_all(new_content.as_bytes())?;
         toml.sync_all()?;
     }
         
