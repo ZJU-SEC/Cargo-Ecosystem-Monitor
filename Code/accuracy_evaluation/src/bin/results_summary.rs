@@ -62,7 +62,7 @@ fn main() -> std::io::Result<()> {
         if *cargotree_crates_num_single == 0 {
             if *pipeline_crates_num_single != 0 {
                 // Pipiline over-resolve:
-                //      This is caused by local path in toml file, we skip the evaluation of this.
+                //      This is caused by local configurations in toml file, and we skip the evaluation of this.
                 //      Now, we can't handle this. But this is the problem from benchmark, not our resolution pipeline.
                 pipeline_total_overresolve.push(display.to_string());
                 continue;
@@ -89,9 +89,15 @@ fn main() -> std::io::Result<()> {
         wrong_dep               += wrong_dep_single           ;
         missing_dep             += missing_dep_single         ;
     }
-    println!("pipeline_total_overresolve : {:#?}", pipeline_total_overresolve);
-    println!("pipeline_failure : {:#?}", pipeline_failure);
-    println!("accuracy_alarm : {:#?}", accuracy_alarm);
+
+    let tree_accuracy   = match_count as f64 / crate_count as f64  * 100  as f64;
+    let precision       = right_dep as f64 / (right_dep + wrong_dep + overresolve_dep) as f64  * 100  as f64;
+    let recall          = right_dep as f64 / (right_dep + missing_dep) as f64  * 100  as f64;
+    let f1score         = 2.0 * (recall * precision) / (recall + precision);
+
+    // println!("pipeline_total_overresolve : {:#?}", pipeline_total_overresolve);
+    // println!("pipeline_failure : {:#?}", pipeline_failure);
+    // println!("accuracy_alarm : {:#?}", accuracy_alarm);
 
     println!("crate_count          = {}", crate_count );
     println!("match_count          = {}", match_count );
@@ -101,5 +107,10 @@ fn main() -> std::io::Result<()> {
     println!("right_dep            = {}", right_dep            );
     println!("wrong_dep            = {}", wrong_dep            );
     println!("missing_dep          = {}", missing_dep          );
+    println!("\nResolution Accuracy Summary: ");
+    println!("Tree Accuracy        = {:.3}%", tree_accuracy);
+    println!("Precision            = {:.3}%", precision    );
+    println!("Recall               = {:.3}%", recall       );
+    println!("F1Score              = {:.3}%", f1score      );
     Ok(())
 }
