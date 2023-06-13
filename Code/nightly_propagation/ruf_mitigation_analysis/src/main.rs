@@ -1,14 +1,26 @@
 use std::collections::{HashSet, HashMap};
 use std::sync::{Arc, Mutex};
+use std::path::Path;
+use std::fs::{create_dir, remove_dir_all, File, OpenOptions};
+use std::io::prelude::*;
 
-use RUF_remediation::{get_ruf_status, get_lifetime};
+use RUF_mitigation::{get_ruf_status, get_lifetime};
 use lifetime::RUSTC_VER_NUM;
 use postgres::{Client, NoTls};
 mod lifetime;
 
 const MAX_RUSTC_VERSION:usize = 63; // 1.0.0 -> 1.63.0
+const RESULTSFILE:&str = "./mitigation_results.csv";
 
 fn main() {
+    let path = Path::new(RESULTSFILE);
+    let mut file = File::create(&path).unwrap();
+    let line = "ver_id,before_status,after_mitigation,recovery_point\n";
+    if let Err(why) = file.write_all(line.as_bytes()) {
+        panic!("couldn't write to {}: {}", path.display(), why);
+    }
+
+
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -22,48 +34,47 @@ fn main() {
 
     // 1. Newest version status
     let mut count = 0;
-    let mut count_failure = 0;
-    let mut count_unstable = 0;
-    let mut count_stable = 0;
-    for (_ver, ruf_impact) in &ruf_impacts {
+    let mut before_count_failure = 0;
+    let mut before_count_unstable = 0;
+    let mut before_count_stable = 0;
+    let mut after_count_failure = 0;
+    let mut after_count_unstable = 0;
+    let mut after_count_stable = 0;
+    for (ver, ruf_impact) in &ruf_impacts {
         count += 1;
-        let status = get_version_ruf_status(ruf_impact, MAX_RUSTC_VERSION , &ruf_lifetime);
-        match status {
-            "failure" => count_failure += 1,
-            "unstable" => count_unstable += 1,
-            "stable" => count_stable += 1,
+        // Before Mitigation
+        let before_status = get_version_ruf_status(ruf_impact, MAX_RUSTC_VERSION , &ruf_lifetime);
+        match before_status {
+            "failure"   => before_count_failure += 1,
+            "unstable"  => before_count_unstable += 1,
+            "stable"    => before_count_stable += 1,
             _ => (),
         };
-        // println!("status: {}, impacts:{:?}", status, ruf_impact);
-    }
-    println!("Newest_version");
-    println!("count {}", count);
-    println!("count_failure {}", count_failure);
-    println!("count_unstable {}", count_unstable);
-    println!("count_stable {}", &count_stable);
+        // After Mitigation
+        let (after_status, recovery_point) = get_version_ruf_status_all(ruf_impact, &ruf_lifetime);
+        match after_status {
+            "failure"   => after_count_failure += 1,
+            "unstable"  => after_count_unstable += 1,
+            "stable"    => after_count_stable += 1,
+            _ => (),
+        };
+        // Write detail to result file
+        let line = format!("{},{},{},{}\n", ver, before_status, after_status,recovery_point);
+        if let Err(why) = file.write_all(line.as_bytes()) {
+            panic!("couldn't write to {}: {}", path.display(), why);
+        }
 
-    // 2. All possible version status
-    let mut count = 0;
-    let mut count_failure = 0;
-    let mut count_unstable = 0;
-    let mut count_stable = 0;
-    for (_ver, ruf_impact) in &ruf_impacts {
-        count += 1;
-        let status = get_version_ruf_status_all(ruf_impact, &ruf_lifetime);
-        match status {
-            "failure" => count_failure += 1,
-            "unstable" => count_unstable += 1,
-            "stable" => count_stable += 1,
-            _ => (),
-        };
-        // println!("status: {}, impacts:{:?}", status, ruf_impact);
     }
-    println!("All versions");
-    println!("count {}", count);
-    println!("count_failure {}", count_failure);
-    println!("count_unstable {}", count_unstable);
-    println!("count_stable {}", &count_stable);
-    
+    println!("Count {}"                 , count);
+    println!("Newest Version");
+    println!("before_count_failure  {}" , before_count_failure);
+    println!("before_count_unstable {}" , before_count_unstable);
+    println!("before_count_stable   {}" , before_count_stable);
+    println!("After Mitigation");
+    println!("after_count_failure   {}" , after_count_failure);
+    println!("after_count_unstable  {}" , after_count_unstable);
+    println!("after_count_stable {  }"  , after_count_stable);
+
 
 
 }
@@ -106,17 +117,24 @@ fn get_ruf_impact(conn: Arc<Mutex<Client>>) -> HashMap<i32, Vec<String>> {
 /// Return the best ruf status through all rustc version where specific package version is using. This represents that the version can be safety recovered.
 ///     Arg: ruf_impact: Vec<RUF>, rustc_version: Specify rustc_version where RUF is running, lifetime_table: RUF lifetime
 ///     Return: Worst ruf status. Can be "stable", "unstable" (including "active" and "imcomplete"), "failure" (including "removed" and "unknown").
-fn get_version_ruf_status_all(ruf_impact: &Vec<String>, lifetime_table: &HashMap<&'static str, [&'static str; RUSTC_VER_NUM]> ) -> &'static str{
+///             Also, return the recovery point.
+fn get_version_ruf_status_all(ruf_impact: &Vec<String>, lifetime_table: &HashMap<&'static str, [&'static str; RUSTC_VER_NUM]> ) -> (&'static str, usize){
     let mut final_status = "failure";
-    for i in 0..(MAX_RUSTC_VERSION + 1){
+    let mut recovery_point = MAX_RUSTC_VERSION;
+    for i in (0..(MAX_RUSTC_VERSION + 1)).rev(){
         let status = get_version_ruf_status(ruf_impact, i, lifetime_table);
         match status {
-            "stable" => return "stable",
-            "unstable" => final_status = "unstable",
+            "stable" => return ("stable", i),
+            "unstable" => {
+                if final_status != "unstable" {
+                    recovery_point = i;
+                }
+                final_status = "unstable";
+            }
             _ => (),
         };
     }
-    final_status
+    (final_status, recovery_point )
 }
 
 /// Return the worst ruf status (given rustc version) where specific package version is using. This represents that whether the version can be safety used.
