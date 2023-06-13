@@ -6,7 +6,7 @@ We spawn 20 threads for processing by default.
 
 ### Preliminaries
 
-This project needs pre-downloaded crates source code in path `CRATESDIR`, and modified Rust compiler in path `RUSTC`. Make sure they are prepared.
+This project needs pre-downloaded crates source code in path `CRATESDIR` (configured in `main.rs`), and modified Rust compiler in path `RUSTC` (configured in `util.rs`). Make sure they are prepared.
 
 To pre-download source codes of all crates, you can use project "crate_downloader" in the parent directory. Modified Rust compiler is in root directory of Cargo Ecosystem Monitor.
 

@@ -20,7 +20,7 @@ use toml::Value;
 use walkdir::WalkDir;
 
 const THREAD_LOAD: i32 = 20;
-const RUSTC: &str = "/home/loancold/Projects/Cargo-Ecosystem-Monitor/rust/build/x86_64-unknown-linux-gnu/stage1/bin/rustc";
+const RUSTC: &str = "path/to/sourse_code/rust/build/x86_64-unknown-linux-gnu/stage1/bin/rustc";
 
 struct VersionInfo {
     version_id: i32,

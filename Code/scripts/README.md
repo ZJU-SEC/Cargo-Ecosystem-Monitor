@@ -5,3 +5,5 @@ This directory includes SQL scripts to analyze the Crates database. Different SQ
 To use these scripts, you should not directly run each scripts. In each sql file, there are many seperate query sql codes. You should run them seperately.
 
 Be aware that some scripts depend on prebuild tables, you should build them in `prebuild.sql` file.
+
+Lastly, make sure you read and understand the documentation to avoid corrupting your data.
