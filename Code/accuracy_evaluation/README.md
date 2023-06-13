@@ -1,6 +1,15 @@
 # Accuracy Evaluation
 
-This crate is used to evaluate the accuracy of the Resolution Pipeline of "Cargo Ecosystem Monitor". Before executing any programs in this project, you should:
+This crate is used to evaluate the accuracy of the Resolution Pipeline of "Cargo Ecosystem Monitor".
+### View Evaluation Results NOW
+
+We store our evaluation results in the file `EDG_Evaluation_20220811.zip` and can be extracted and viewed directly.
+
+After extracting result file in this directory, run `cargo run --bin summary_release` in your shell and you can see the summary of the results.
+
+### Re-evaluate Our Pipeline
+
+Before executing any programs in this project, you should:
 
 1. build your crates postgresql database from Crates.io first. dbname=crates user=postgres password=postgres.
 2. Run project `rust_deps` to build table `dep_version`.
@@ -16,10 +25,11 @@ This crate is used to evaluate the accuracy of the Resolution Pipeline of "Cargo
   [source.crates-io]
   replace-with = "cargo_ecosystem_monitor"
   ```
-4. Run scripts `prebuild.sql` to build neccesary tables. 
-5. Run `cargo run --bin benchmark_dataset` under this project. This will automatically generate dataset under directory `output`.
-6. Run `cargo run --bin pipeline_evaluation` under this project. This will automatically generate pipeline resolution results under directory `output`, and also store comparison results.
-7. Run `cargo run --bin results_summary` under this project. This will automatically analyze comparison results and print them in command line.
+4. Run scripts `Code/scripts/prebuild.sql` to build neccesary tables. 
+5. Run `cargo run --bin autorun` to automatically start the evaluation process, which will run three separate programs for each dataset:
+   1. Run `cargo run --bin benchmark_dataset` under this project. This will automatically generate dataset under directory `output`.
+   2. Run `cargo run --bin pipeline_evaluation` under this project. This will automatically generate pipeline resolution results under directory `output`, and also store comparison results.
+   3. Run `cargo run --bin results_summary` under this project. This will automatically analyze comparison results and print them in command line.
 
 WARNING: As it override your local Cargo configuration, you should not do anything related to Rust and Cargo to avoid unexpected behavior when running this program or use this configuration! Reset Cargo configuration (remove our `~/.cargo/config.toml` file) after execution. 
 

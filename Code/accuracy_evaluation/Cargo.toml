@@ -21,6 +21,10 @@ path = "src/bin/pipeline_evaluation.rs"
 name = "auto_run"
 path = "src/bin/auto_run.rs"
 
+[[bin]]
+name = "summary_release"
+path = "src/bin/summary_release.rs"
+
 [dependencies]
 downloader = "=0.2.6"
 postgres = "0.19.2"
