@@ -11,3 +11,5 @@ If you have specific package feature configurations, you can run as `cargo`, for
 ```shell
 $ cargo_ruf --features "default"
 ```
+
+See ![custom subcommands](https://doc.rust-lang.org/cargo/reference/external-tools.html#custom-subcommands) to integrate our tools into Cargo.
