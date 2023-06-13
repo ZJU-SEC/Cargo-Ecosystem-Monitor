@@ -3,7 +3,7 @@
 version = 3
 
 [[package]]
-name = "RUF_remediation"
+name = "RUF_mitigation"
 version = "0.1.0"
 dependencies = [
  "postgres",
