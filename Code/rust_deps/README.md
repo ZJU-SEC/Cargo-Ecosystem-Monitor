@@ -2,7 +2,7 @@
 
 0. Build your Crates.io DB (As told in root directory Readme file)
 
-Get to website `crates.io/data-access` and follows Step 2. The README.md in data will tell you how to set up your DB.
+Get to [crates.io website](https://crates.io/data-access) and follows Step 2. The README.md in it will tell you how to set up your DB.
 
 1. Clone remote registry (As told in root directory Readme file)
 
