@@ -1,19 +1,26 @@
 env:
-	sudo apt install cmake ninja-build
+	apt-get install -y postgresql
+	apt-get install -y ninja-build build-essential pkg-config libssl-dev
+	apt-get install -y cmake curl vim python3 git pip zip
+#	apt-get install postgresql postgresql-client postgresql-contrib
 
 rust:
-	curl https://sh.rustup.rs -sSf | sh
+	curl https://sh.rustup.rs -sSf | sh -s -- -y
 
+postgresql_version := $(shell ls /etc/postgresql)
 postgresql:
-	sudo apt update
-	sudo apt install postgresql postgresql-contrib
-	sudo apt-get install postgresql postgresql-client
-	sudo systemctl start postgresql.service
+	service postgresql start
+	su postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres'\""
+	cp ./config/pg_hba.conf /etc/postgresql/$(postgresql_version)/main/pg_hba.conf
+	service postgresql restart
+#	echo "listen_addresses='*'" >> /etc/postgresql/$(postgresql_version)/main/postgresql.conf
 
 cratesio:
 	curl https://static.crates.io/db-dump.tar.gz --output ./data/crates.db-dump.tar.gz
 	cd data && tar -xf crates.db-dump.tar.gz 
 
+extract_cratesio_once:
+	cd data && tar -xf crates.db-dump.tar.gz 
 
 time 		:= $(shell ls data | egrep '[0-9]+-[0-9]+-[0-9]+-[0-9]+' | sort -r | head -n 1)
 timewords 	:= $(subst -, ,$(time))
