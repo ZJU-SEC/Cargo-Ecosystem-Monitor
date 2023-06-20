@@ -21,7 +21,7 @@ use crossbeam::channel::{self};
 use log::{error, info, warn};
 use postgres::{Client, NoTls};
 
-use crate::graph::{self, Node};
+// use crate::graph::{self, Node};
 
 struct VersionInfo {
     version_id: i32,

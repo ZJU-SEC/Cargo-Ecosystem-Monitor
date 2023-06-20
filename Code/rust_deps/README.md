@@ -53,3 +53,8 @@ The main process can be conclude into these process:
 2. Pre-resolve: Resolve current crate. And find all `features` including user-defined and optional dependency from resolution results.
 3. Double-resolve: Creating toml file with all features on. Then resolve it.
 4. Formatting Resolve and store into DB
+
+
+### Known Issue
+
+The memory usage will continue rising when running the program, and the program usually not exits as some packages block the processing in the end. You can cancle the program and rerun it to make everything right until almost all packages in the ecosystem have been resolved.

@@ -7,7 +7,7 @@ use std::fs::OpenOptions;
 use util::*;
 
 mod util;
-mod graph;
+// mod graph;
 
 fn main() {
     CombinedLogger::init(vec![
@@ -31,6 +31,6 @@ fn main() {
     ])
     .unwrap();
 
-    run_deps(30, "undone");
+    run_deps(20, "undone");
     // run_deps(20, "processing");
 }
