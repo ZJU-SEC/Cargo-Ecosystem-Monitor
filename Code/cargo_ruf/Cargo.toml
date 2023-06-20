@@ -1,5 +1,5 @@
 [package]
-name = "cargo_ruf"
+name = "cargo-ruf"
 version = "0.1.0"
 edition = "2021"
 
