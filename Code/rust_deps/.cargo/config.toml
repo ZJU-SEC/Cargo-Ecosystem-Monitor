@@ -2,7 +2,7 @@
 git-fetch-with-cli = true
 
 [source.mirror]
-registry = "file:///home/loancold/projects/Cargo-Ecosystem-Monitor/crates.io-index"
+registry = "file:///app/crates.io-index"
 
 [source.crates-io]
 replace-with = "mirror"
