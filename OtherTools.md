@@ -109,3 +109,10 @@ The complete output follows json style, and is quite complicated. I use python s
 ### Execute our projects in server using SSH
 
 To avoid terminating the execution after SSH termination, you should use `nohup` by using shell command `nohup cargo run >&/dev/null&`. The `/dev/null` is used to avoid catching output, because it occupies large number of storage.
+
+### Other related projects
+
+- RustSec: https://github.com/rustsec/rustsec
+- Cargo-lock: https://github.com/RustSec/rustsec/tree/main/cargo-lock
+- Cargo-audit: https://github.com/RustSec/rustsec/tree/main/cargo-audit
+- Others: See [OtherTools](./OtherTools.md)
