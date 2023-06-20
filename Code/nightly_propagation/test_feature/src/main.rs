@@ -65,7 +65,9 @@ check:
 
 fn main() {
     // enable if rustc versions not downloaded
-    // download_info(); return;
+    println!("Download Compiler Source Code ...");
+    download_info();
+    return;
     let conn = Arc::new(Mutex::new(
         Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
@@ -94,8 +96,10 @@ fn main() {
     ])
     .unwrap();
 
+    println!("Prebuild Database ...");
     prebuild(Arc::clone(&conn));
 
+    println!("Extracting RUF Lifetime ...");
     for v in 0..=67 {
         conn.lock()
             .unwrap()

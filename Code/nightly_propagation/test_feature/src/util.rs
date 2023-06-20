@@ -7,7 +7,7 @@ use tar::Archive;
 use walkdir::WalkDir;
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{create_dir, File, OpenOptions};
+use std::fs::{remove_dir_all,create_dir, File, OpenOptions};
 use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -36,6 +36,7 @@ pub enum Status {
 
 #[allow(unused)]
 pub fn download_info() {
+    remove_dir_all("on_process").unwrap_or_default();
     create_dir("on_process").unwrap_or_default();
 
     let mut downloader = Downloader::builder()
