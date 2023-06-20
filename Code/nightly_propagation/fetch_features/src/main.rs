@@ -12,7 +12,8 @@ use simplelog::*;
 use std::fs::OpenOptions;
 use util::{run, run_offline};
 
-const CRATEDIR: &str = "path/to/sourse_code";
+// const CRATEDIR: &str = "path/to/sourse_code";
+const CRATEDIR: &str = "/app/Code/crate_downloader/on_process";
 
 fn main() {
     CombinedLogger::init(vec![
