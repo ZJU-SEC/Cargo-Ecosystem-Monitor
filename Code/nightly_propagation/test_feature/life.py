@@ -17,8 +17,8 @@ column = ["1.%s.0" % i for i in range(0, 68)]
 def fetch_lifetime() -> pd.DataFrame:
     cur = conn.cursor()
     # cur.execute('select * from feature_timeline')
-    # cur.execute('SELECT * FROM feature_timeline WHERE name in (SELECT name from feature_abnormal) ORDER BY "v1_60_0", "v1_50_0", "v1_40_0", "v1_30_0", "v1_20_0", "v1_10_0", "v1_0_0"')
-    cur.execute('SELECT * FROM feature_timeline ORDER BY "v1_60_0", "v1_50_0", "v1_40_0", "v1_30_0", "v1_20_0", "v1_10_0", "v1_0_0"')
+    cur.execute('SELECT * FROM feature_timeline WHERE name in (SELECT name from feature_abnormal) ORDER BY "v1_60_0", "v1_50_0", "v1_40_0", "v1_30_0", "v1_20_0", "v1_10_0", "v1_0_0"')
+    # cur.execute('SELECT * FROM feature_timeline ORDER BY "v1_60_0", "v1_50_0", "v1_40_0", "v1_30_0", "v1_20_0", "v1_10_0", "v1_0_0"')
     rows = np.array(cur.fetchall())
     lifetime = rows[:, 1:]
     index = rows[:, 0]
