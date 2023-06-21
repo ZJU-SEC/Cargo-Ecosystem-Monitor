@@ -12,8 +12,8 @@ postgresql:
 	service postgresql start
 	su postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres'\""
 	cp ./config/pg_hba.conf /etc/postgresql/$(postgresql_version)/main/pg_hba.conf
+	echo "listen_addresses='*'" >> /etc/postgresql/$(postgresql_version)/main/postgresql.conf
 	service postgresql restart
-#	echo "listen_addresses='*'" >> /etc/postgresql/$(postgresql_version)/main/postgresql.conf
 
 cratesio:
 	curl https://static.crates.io/db-dump.tar.gz --output ./data/crates.db-dump.tar.gz
@@ -36,6 +36,11 @@ sencond		:= $(shell expr substr "$(timeofday)" 5 2)
 dropdatabaseALL:
 	echo BE AWARE THAT ALL DATA IN THE DATABASE WILL BE LOST!!!
 	echo DROP DATABASE IF EXISTS crates | psql -U postgres 
+
+import_rawdata:
+	createdb -U postgres crates
+	psql -U postgres crates < ./data/alltables_20220811.sql
+
 
 database: 
 	createdb -U postgres crates
