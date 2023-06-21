@@ -57,7 +57,7 @@ Make sure that your processor(6+ cores), memory size(16+GB) and disk size (5GB f
 
 #### Using Ecosystem Raw Data
 
-First, you should download [Ecosystem Raw Data (2022-08-11)](https://drive.google.com/file/d/18E811OuNH3V5wKUhnRMoOnaUGcdnKlkz/view?usp=sharing) under `./Data` directory. Then, build your docker using our docker file and run it. If the build scripts doesn't work, you can download our docker image directly (link). The command lines should be like:
+First, you should download [Ecosystem Raw Data (2022-08-11)](https://drive.google.com/file/d/1xKjtcSRHJ9oa1xwJtT9TJb__5mnJbwPv/view?usp=sharing) under `./Data` directory. Then, build your docker using our docker file and run it. If the build scripts doesn't work, you can download our docker image directly (link). The command lines should be like:
 
 ```Shell
 # Clone git submodule
