@@ -188,7 +188,7 @@ ON crate_date > created_at GROUP BY crate_date ORDER BY crate_date ASC;
 DROP TABLE IF EXISTS tmp_ruf_remediation_analysis;
 CREATE TABLE tmp_ruf_remediation_analysis AS (
     SELECT DISTINCT id, feature FROM version_feature
-    WHERE feature IS NOT NULL
+    WHERE feature != 'no_feature_used'
 );
 INSERT INTO tmp_ruf_remediation_analysis
     SELECT DISTINCT version_from, feature FROM version_feature 
