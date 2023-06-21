@@ -25,6 +25,7 @@ Before executing any programs in this project, you should:
   [source.crates-io]
   replace-with = "cargo_ecosystem_monitor"
   ```
+  2. If you are using the provided docker, you can directly run `make replace_cargo_mirror` before running the evaluation process. And after the evaluation process, run `make restore_cargo_mirror` to remove the configurations. Make sure you know what is going to happen when you run it in your host machine.
 4. Run scripts `Code/scripts/prebuild.sql` to build neccesary tables. 
 5. Run `cargo run --bin autorun` to automatically start the evaluation process, which will run three separate programs for each dataset:
    1. Run `cargo run --bin benchmark_dataset` under this project. This will automatically generate dataset under directory `output`.
