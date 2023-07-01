@@ -56,7 +56,16 @@ test:
 	@echo $(hour)
 	@echo $(minute)
 	@echo $(sencond)
-	
+
+anonymous:
+	git config user.name 'Anonymous'
+	git config user.email '<>'
+	git remote remove origin
+	git checkout --orphan release
+	git add -A
+	git commit -am "Release"
+	git branch -D master
+	git branch -m master
 
 
 # clone submodule of crates.io-index and rust
