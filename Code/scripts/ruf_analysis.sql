@@ -195,3 +195,22 @@ INSERT INTO tmp_ruf_remediation_analysis
     INNER JOIN dep_version ON version_to=id WHERE conds = '' AND feature IS NOT NULL;
 INSERT INTO tmp_ruf_remediation_analysis
     SELECT  DISTINCT version_from, nightly_feature FROM dep_version_feature;
+
+
+-- 8. RUF Configuration Predicates
+
+SELECT count(DISTINCT feature) FROM version_feature_ori  WHERE feature IS NOT NULL;
+SELECT count(*) FROM version_feature_ori  WHERE feature IS NOT NULL;
+SELECT count(*) FROM version_feature  WHERE feature != 'no_feature_used';
+-- Predicates analysis
+SELECT count(*) FROM version_feature  WHERE feature != 'no_feature_used' AND conds = '';
+SELECT conds, count(*) FROM version_feature  WHERE feature != 'no_feature_used' AND conds != '' group by conds order by count desc;
+SELECT count(*) FROM version_feature  WHERE feature != 'no_feature_used' AND conds LIKE 'feature = %';
+
+
+-- 9. Abnormal RUF
+SELECT DISTINCT feature FROM version_feature_ori WHERE feature NOT IN (SELECT name FROM feature_timeline);
+SELECT count(*)  FROM version_feature_ori WHERE feature NOT IN (SELECT name FROM feature_timeline);
+SELECT count(*)  FROM version_feature_ori WHERE feature = 'libc' OR feature = 'rust_2018_preview' OR feature = 'const_slice_from_raw_parts_mut' OR feature = 'strict_provenance_atomic_ptr';
+
+-- 10. Super-spreader "redox_syscall-1.0.57" RUF Impact Mitigation

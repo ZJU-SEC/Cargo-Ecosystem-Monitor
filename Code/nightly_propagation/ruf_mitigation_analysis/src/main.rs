@@ -28,8 +28,11 @@ fn main() {
         )
         .unwrap(),
     ));
+    println!("Build RUF Impact Table (May take minutes)...");
     let ruf_impacts = get_ruf_impact(Arc::clone(&conn));
     let ruf_lifetime = get_lifetime();
+    init_mitigation_results_db(Arc::clone(&conn));
+    println!("Simulate Mitigation Process...");
     // println!("count {:#?}", ruf_impacts);
 
     // 1. Newest version status
@@ -42,6 +45,9 @@ fn main() {
     let mut after_count_stable = 0;
     for (ver, ruf_impact) in &ruf_impacts {
         count += 1;
+        if (count % 10000) == 0 {
+            println!("Processing {count}th package version...");
+        }  
         // Before Mitigation
         let before_status = get_version_ruf_status(ruf_impact, MAX_RUSTC_VERSION , &ruf_lifetime);
         match before_status {
@@ -59,11 +65,11 @@ fn main() {
             _ => (),
         };
         // Write detail to result file
-        let line = format!("{},{},{},{}\n", ver, before_status, after_status,recovery_point);
+        let line = format!("{},{},{},{}\n", *ver, before_status, after_status,recovery_point);
         if let Err(why) = file.write_all(line.as_bytes()) {
             panic!("couldn't write to {}: {}", path.display(), why);
         }
-
+        store_mitigation_results_db(Arc::clone(&conn), *ver, before_status, after_status, recovery_point);
     }
     println!("Count {}"                 , count);
     println!("Newest Version");
@@ -83,22 +89,20 @@ fn main() {
 /// Pre build
 /// Return: ruf impact <id, Vec<RUF>>
 fn get_ruf_impact(conn: Arc<Mutex<Client>>) -> HashMap<i32, Vec<String>> {
-    // conn.lock()
-    // .unwrap()
-    // .query(
-    // r#"DROP TABLE IF EXISTS tmp_ruf_remediation_analysis;
-    //     CREATE TABLE tmp_ruf_remediation_analysis AS (
-    //         SELECT DISTINCT id, feature FROM version_feature
-    //         WHERE feature IS NOT NULL
-    //     );
-    //     INSERT INTO tmp_ruf_remediation_analysis
-    //         SELECT DISTINCT version_from, feature FROM version_feature 
-    //         INNER JOIN dep_version ON version_to=id WHERE conds = '' AND feature IS NOT NULL;
-    //     INSERT INTO tmp_ruf_remediation_analysis
-    //         SELECT  DISTINCT version_from, nightly_feature FROM dep_version_feature;"#,
-    // &[],
-    // )
-    // .unwrap();
+    conn.lock().unwrap().
+        query("DROP TABLE IF EXISTS tmp_ruf_remediation_analysis;", &[]).unwrap();
+    conn.lock().unwrap().
+        query(r#"CREATE TABLE tmp_ruf_remediation_analysis AS (
+            SELECT DISTINCT id, feature FROM version_feature
+            WHERE feature != 'no_feature_used'
+        );"#, &[]).unwrap();
+    conn.lock().unwrap().
+        query(r#"INSERT INTO tmp_ruf_remediation_analysis
+        SELECT DISTINCT version_from, feature FROM version_feature 
+        INNER JOIN dep_version ON version_to=id WHERE conds = '' AND feature IS NOT NULL;"#, &[]).unwrap();
+    conn.lock().unwrap().
+        query(r#"INSERT INTO tmp_ruf_remediation_analysis
+        SELECT  DISTINCT version_from, nightly_feature FROM dep_version_feature;"#, &[]).unwrap();
     let query = format!(
         "SELECT DISTINCT id, feature FROM tmp_ruf_remediation_analysis;"
     );
@@ -156,4 +160,37 @@ fn get_version_ruf_status(ruf_impact: &Vec<String>, rustc_version:usize, lifetim
         }
     }
     status
+}
+
+fn init_mitigation_results_db(conn: Arc<Mutex<Client>>) {
+    conn.lock().unwrap().
+        query("DROP TABLE IF EXISTS mitigation_results", &[]).unwrap();
+    conn.lock()
+        .unwrap()
+        .query(
+            r#"CREATE TABLE public.mitigation_results
+            (
+                ver_id INT,
+                before_mitigation VARCHAR,
+                after_mitigation VARCHAR,
+                recovery_point INT
+            )"#,
+            &[],
+        )
+        .unwrap();
+}
+
+fn store_mitigation_results_db(
+    conn: Arc<Mutex<Client>>,
+    ver_id: i32,
+    before_mitigation: &str,
+    after_mitigation: &str,
+    recovery_point: usize) 
+{
+    conn.lock().unwrap()
+                .query(&format!(
+                    "INSERT INTO mitigation_results VALUES ({},'{}','{}',{})"
+                    , ver_id, before_mitigation, after_mitigation, recovery_point),
+                    &[],
+                ).unwrap();
 }
