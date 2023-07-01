@@ -6,9 +6,9 @@ ENV DEBIAN_FRONTEND=noninterative
 # WORKDIR /usr/src/Cargo-ecosystem-Monitor
 # COPY . .
 RUN apt-get update && apt-get install -y make gcc
-RUN install -y postgresql
-RUN install -y ninja-build build-essential pkg-config libssl-dev
-RUN install -y cmake curl vim python3 git pip zip
+RUN apt-get install -y postgresql
+RUN apt-get install -y ninja-build build-essential pkg-config libssl-dev
+RUN apt-get install -y cmake curl vim python3 git pip zip
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH=$PATH:/root/.cargo/bin
 # Verify version
