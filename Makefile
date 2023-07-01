@@ -62,7 +62,8 @@ test:
 # clone submodule of crates.io-index and rust
 submodule:
 	git submodule sync
-	git submodule update --init
+	git submodule update --init crates.io-index
+	git submodule update --init rust
 
 
 # Set correct commits of Rust index.

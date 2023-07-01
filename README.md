@@ -71,7 +71,7 @@ docker run -it -dp 127.0.0.1:12345:5432 -e POSTGRES_PASSWORD="postgres" -w /app 
 docker exec -it <docker-id> bash
 # Setup Extra Confiigurations
 make postgresql
-# Import Raw Data (Password "postgres", Only Once)
+# Import Raw Data (Password "postgres", Only Once). It may take 10min or more.
 make import_rawdata
 # Now, you can feel free to analyze the Rust ecosystem using postgresql scripts.
 ```
@@ -82,7 +82,7 @@ You can access the postgresql from port `12345` in the host machine as user `pos
 
 #### Using Ecosystem Metadata
 
-To build our projects and generate raw data from scratch, you should do something more. First, you should download [ecosystem metadata 2022-08-11](https://drive.google.com/file/d/1-2oamGvhUOT4fIJlYB2e8PN9D_thHcmK/view?usp=sharing) under `./Data` directory. The command lines should be like:
+The entire process may take 2 days as we need to resolve ecosystem dependency graph and download all source codes of the ecosystem. To build our projects and generate raw data from scratch, you should do something more. First, you should download [ecosystem metadata 2022-08-11](https://drive.google.com/file/d/1-2oamGvhUOT4fIJlYB2e8PN9D_thHcmK/view?usp=sharing) under `./Data` directory. The command lines should be like:
 
 ```Shell
 # Clone git submodule
