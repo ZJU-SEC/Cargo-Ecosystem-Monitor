@@ -54,6 +54,56 @@ The main process can be conclude into these process:
 3. Double-resolve: Creating toml file with all features on. Then resolve it.
 4. Formatting Resolve and store into DB
 
+### Run a single deps
+
+If you want to view dependency trees given a package version, you can run `get_deps`.
+```Shell
+cargo run --bin get_deps <name> <version_num>
+```
+The output format follows: `<dep_name>,<version_num>,<dep_depth>`. For example, if we run `cargo run --bin get_deps rand 0.8.5`, the output should be
+```Shell
+unicode-ident,1.0.3,4
+unicode-ident,1.0.3,7
+syn,1.0.99,3
+cfg-if,1.0.0,2
+proc-macro2,1.0.43,3
+rand_chacha,0.3.1,1
+wasi,0.11.0+wasi-snapshot-preview1,4
+rand_core,0.6.3,2
+wasi,0.11.0+wasi-snapshot-preview1,3
+syn,1.0.99,5
+serde_derive,1.0.143,4
+getrandom,0.2.7,3
+serde_derive,1.0.143,3
+proc-macro2,1.0.43,5
+quote,1.0.21,5
+serde,1.0.143,2
+libc,0.2.129,3
+quote,1.0.21,3
+getrandom,0.2.7,2
+proc-macro2,1.0.43,7
+libc,0.2.129,1
+syn,1.0.99,4
+serde,1.0.143,3
+quote,1.0.21,4
+unicode-ident,1.0.3,6
+cfg-if,1.0.0,3
+proc-macro2,1.0.43,6
+rand_core,0.6.3,1
+libm,0.1.4,2
+serde_derive,1.0.143,2
+libc,0.2.129,4
+proc-macro2,1.0.43,4
+unicode-ident,1.0.3,5
+quote,1.0.21,6
+unicode-ident,1.0.3,8
+packed_simd_2,0.3.8,1
+ppv-lite86,0.2.16,2
+log,0.4.17,1
+cfg-if,1.0.0,4
+serde,1.0.143,1
+```
+
 
 ### Known Issue
 
