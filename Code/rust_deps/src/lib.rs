@@ -116,7 +116,7 @@ pub fn resolve_deps_of_version_once(
         }
     }
 
-    // Store dep info into DB.
+    // Format output
     let mut deps = String::new();
     for (version_to, level) in set {
         deps.push_str(&format!("{},{},{}\n", version_to.0, version_to.1, level));
