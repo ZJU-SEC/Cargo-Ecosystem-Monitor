@@ -125,6 +125,87 @@ pub fn resolve_deps_of_version_once(
     Ok(deps)
 }
 
+/// Resolve version's dependencies. This time, we print raw dependency results with full info.
+/// Is is recommended to be used for small mount of queries as it lacks of performance optimization. 
+pub fn resolve_deps_of_version_once_full(
+    name: String,
+    num: String,
+) -> Result<String> {
+    let mut features = Vec::new();
+
+    // Create virtual env by creating toml file
+    // Fill toml contents
+    let current_path = current_dir()?;
+    let dep_filename = format!("dep_once.toml");
+    let current_toml_path = format!("{}/{}", current_path.display(), dep_filename);
+
+    // Create toml file
+    let file = format_virt_toml_file(&name, &num, &features);
+    File::create(&current_toml_path)?
+        .write_all(file.as_bytes())
+        .expect("Write failed");
+
+    // 1. Pre Resolve: To find all features of given crate
+    // Create virtual env by setting correct workspace
+    let config = Config::new(
+        Shell::new(),
+        env::current_dir()?,
+        format!("{}/job_once", current_path.to_str().unwrap()).into(),
+    );
+    let ws = Workspace::new(&Path::new(&current_toml_path), &config)?;
+    let mut registry = PackageRegistry::new(ws.config())?;
+    let resolve = ops::resolve_with_previous(
+        &mut registry,
+        &ws,
+        &CliFeatures::new_all(true),
+        HasDevUnits::No,
+        None,
+        None,
+        &[],
+        true,
+    )?;
+
+    // Find all `features` including user-defined and optional dependency
+    if let Ok(res) = resolve.query(&format!("{}:{}", name, num)) {
+        for feature in resolve.summary(res).features().keys() {
+            features.push(feature.as_str());
+        }
+    } else {
+        println!("Resolve {}-{} fails to find any features.", name, num);
+    }
+    // println!("All Features: {:?}", features);
+
+    // 2. Double resolve: This time resolve with features
+    // The resolve result is the final one.
+    let file = format_virt_toml_file(&name, &num, &features);
+    // println!("file: {}", file);
+    File::create(&current_toml_path)?
+        .write_all(file.as_bytes())
+        .expect("Write failed");
+    let config = Config::new(
+        Shell::new(),
+        env::current_dir()?,
+        format!("{}/job_once", current_path.to_str().unwrap()).into(),
+    );
+    let ws = Workspace::new(&Path::new(&current_toml_path), &config).unwrap();
+    let mut registry = PackageRegistry::new(ws.config()).unwrap();
+    let resolve = ops::resolve_with_previous(
+        &mut registry,
+        &ws,
+        &CliFeatures::new_all(true),
+        // &features,
+        HasDevUnits::No,
+        None,
+        None,
+        &[],
+        // &[PackageIdSpec::parse("dep").unwrap()],
+        true,
+    )
+    .unwrap();
+
+    Ok(format!("{:?}", resolve))
+}
+
 fn format_virt_toml_file(name: &String, version_num: &String, features: &Vec<&str>) -> String {
     let mut file = String::from(
         r#"[package]

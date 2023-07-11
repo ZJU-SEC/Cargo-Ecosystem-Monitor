@@ -68,42 +68,35 @@ syn,1.0.99,3
 cfg-if,1.0.0,2
 proc-macro2,1.0.43,3
 rand_chacha,0.3.1,1
-wasi,0.11.0+wasi-snapshot-preview1,4
-rand_core,0.6.3,2
-wasi,0.11.0+wasi-snapshot-preview1,3
-syn,1.0.99,5
-serde_derive,1.0.143,4
-getrandom,0.2.7,3
-serde_derive,1.0.143,3
-proc-macro2,1.0.43,5
-quote,1.0.21,5
-serde,1.0.143,2
-libc,0.2.129,3
-quote,1.0.21,3
-getrandom,0.2.7,2
-proc-macro2,1.0.43,7
-libc,0.2.129,1
-syn,1.0.99,4
-serde,1.0.143,3
-quote,1.0.21,4
-unicode-ident,1.0.3,6
-cfg-if,1.0.0,3
-proc-macro2,1.0.43,6
-rand_core,0.6.3,1
-libm,0.1.4,2
-serde_derive,1.0.143,2
-libc,0.2.129,4
-proc-macro2,1.0.43,4
-unicode-ident,1.0.3,5
-quote,1.0.21,6
-unicode-ident,1.0.3,8
-packed_simd_2,0.3.8,1
-ppv-lite86,0.2.16,2
-log,0.4.17,1
-cfg-if,1.0.0,4
-serde,1.0.143,1
+xxx (Omitted)
 ```
 
+If you want to view full dependency info, you can run
+```Shell
+cargo run --bin get_deps full <name> <version_num>
+```
+The output format follows: `graph:{ dependenies of each package version} features:{ package features enabled by each package version}`. 
+For example, if we run `cargo run --bin full get_deps rand 0.8.5`, the output should be
+```Shell
+raph: Graph {
+  - cfg-if v1.0.0
+  ## Our virtual package (dep). Its dependencies are direct dependencies while others are indirect dependencies.
+  - dep v0.1.0 (/home/loancold/Projects/test_rust/docker_rust/Cargo-Ecosystem-Monitor/Code/rust_deps)
+    - rand v0.8.5
+  - getrandom v0.2.7
+    - cfg-if v1.0.0
+    - libc v0.2.129
+    - wasi v0.11.0+wasi-snapshot-preview1
+  - libc v0.2.129
+  xxx Omitted
+}
+
+features: {
+  syn v1.0.99: ["clone-impls", "default", "derive", "parsing", "printing", "proc-macro", "quote"]
+  serde v1.0.143: ["default", "derive", "serde_derive", "std"]
+  xxx Omitted
+}
+```
 
 ### Known Issue
 
