@@ -385,19 +385,19 @@ impl Graph {
                 }
             }
             // Make sure that the deps are optional and non-depvelopment
-            for rdep in summary.dependencies() {
-                let name = &rdep.package_name();
-                if !suspect_deps.contains(name){
-                    continue;
-                }
-                if rdep.kind() == DepKind::Development ||
-                    rdep.is_optional() == false{
-                        suspect_deps.remove(name);
-                    }
-            }
-            // if !suspect_deps.is_empty(){
-            //     println!("Suspect deps of {}: {:?}", pkg.to_string(), suspect_deps);
+            // for rdep in summary.dependencies() {
+            //     let name = &rdep.package_name();
+            //     if !suspect_deps.contains(name){
+            //         continue;
+            //     }
+            //     if rdep.kind() != DepKind::Development &&
+            //         rdep.is_optional() == true{
+            //             suspect_deps.remove(name);
+            //         }
             // }
+            if !suspect_deps.is_empty(){
+                println!("Suspect deps of {}: {:?}", pkg.to_string(), suspect_deps);
+            }
             // By default, we add all dependencies in the `resolve`.
             // However, for dependencies from "dep?/feature", we need to check whether "dep" is really used.
             // If not, we remove the "dep".
