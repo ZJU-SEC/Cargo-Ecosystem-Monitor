@@ -97,6 +97,10 @@ features: {
   xxx Omitted
 }
 ```
+There is one more command for internal debug usage: 
+```Shell
+cargo run --bin get_deps test <name> <version_num>
+```
 
 ### Known Issue
 
