@@ -18,7 +18,7 @@ fn main() {
         println!("{deps}");
         return;
     }
-    if args.len() == 4 && args[1] == "test"{
+    if args.len() == 4 && args[1] == "release"{
         let name = args[2].clone();
         let num = args[3].clone();
         let deps = test_registry(name, num).unwrap();

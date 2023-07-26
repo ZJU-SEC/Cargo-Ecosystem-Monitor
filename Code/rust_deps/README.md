@@ -71,6 +71,14 @@ rand_chacha,0.3.1,1
 xxx (Omitted)
 ```
 
+
+There is one more command for release usage: 
+```Shell
+cargo run --bin get_deps release <name> <version_num>
+```
+This fixes resolution errors caused by new Cargo dependency configurations. We're currently porting this fixed version to our ecosystem resolver to correct errors. We're also expecting Cargo officials to resolve new configurations in their core resolver. In this way, our ecosystem resolver can still work without modification.
+
+
 If you want to view full dependency info, you can run
 ```Shell
 cargo run --bin get_deps full <name> <version_num>
@@ -96,10 +104,6 @@ features: {
   serde v1.0.143: ["default", "derive", "serde_derive", "std"]
   xxx Omitted
 }
-```
-There is one more command for internal debug usage: 
-```Shell
-cargo run --bin get_deps test <name> <version_num>
 ```
 
 ### Known Issue
