@@ -272,7 +272,45 @@ pub fn test_registry(
 
 
 
-    // 2. Formatting Resolve and stripe 
+    // Find all `features` including user-defined and optional dependency
+    if let Ok(res) = resolve.query(&format!("{}:{}", name, num)) {
+        for feature in resolve.summary(res).features().keys() {
+            features.push(feature.as_str());
+        }
+    } else {
+        println!("Resolve {}-{} fails to find any features.", name, num);
+    }
+    // println!("All Features: {:?}", features);
+
+    // 2. Double resolve: This time resolve with features
+    // The resolve result is the final one.
+    let file = format_virt_toml_file(&name, &num, &features);
+    // println!("file: {}", file);
+    File::create(&current_toml_path)?
+        .write_all(file.as_bytes())
+        .expect("Write failed");
+    let config = Config::new(
+        Shell::new(),
+        env::current_dir()?,
+        format!("{}/job_once", current_path.to_str().unwrap()).into(),
+    );
+    let ws = Workspace::new(&Path::new(&current_toml_path), &config).unwrap();
+    let mut registry = PackageRegistry::new(ws.config()).unwrap();
+    let resolve = ops::resolve_with_previous(
+        &mut registry,
+        &ws,
+        &CliFeatures::new_all(true),
+        // &features,
+        HasDevUnits::No,
+        None,
+        None,
+        &[],
+        // &[PackageIdSpec::parse("dep").unwrap()],
+        true,
+    )
+    .unwrap();
+
+    // 3. Formatting Resolve and stripe 
     // Resolve the dep tree.
 
     // println!("{}", format!("Dep: {:?}", resolve));
@@ -344,6 +382,7 @@ impl Graph {
     /// This removes fake dependencies, especially with "dep?/feature" format
     /// but acutally not dependending on "dep".
     pub fn build_deps(name:&str, resolve: Resolve) -> Graph {
+        // println!("Resolve: {:?}", resolve);
         let mut graph = Graph::new();
         let root = resolve.query(name).unwrap();
         let mut v = VecDeque::new();
@@ -395,9 +434,9 @@ impl Graph {
             //             suspect_deps.remove(name);
             //         }
             // }
-            if !suspect_deps.is_empty(){
-                println!("Suspect deps of {}: {:?}", pkg.to_string(), suspect_deps);
-            }
+            // if !suspect_deps.is_empty(){
+            //     println!("Suspect deps of {}: {:?}", pkg.to_string(), suspect_deps);
+            // }
             // By default, we add all dependencies in the `resolve`.
             // However, for dependencies from "dep?/feature", we need to check whether "dep" is really used.
             // If not, we remove the "dep".
@@ -442,6 +481,7 @@ impl Graph {
             // Or we stripe useless packages
             for pkg in &pkgs {
                 if !real_pkgs.contains(pkg){
+                    println!("Remove: {}", pkg.name);
                     graph.versions_deps.remove(pkg);
                 }
             }
