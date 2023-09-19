@@ -1,17 +1,17 @@
 use std::fs::{create_dir, remove_dir_all, OpenOptions};
-use std::io;
 use std::path::Path;
-use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use anyhow::{anyhow, Result};
 use crossbeam::channel::{self};
-use downloader::{Download, Downloader};
+use downloader::Downloader;
 use log::{error, warn};
 use pbr::MultiBar;
 use postgres::{Client, NoTls};
 use simplelog::*;
+
+use crate_downloader::{deal_with_crate, fetch_crate};
+
 
 const CRATESDIR: &str = "./on_process";
 const THREADNUM: usize = 2;
@@ -94,11 +94,11 @@ fn run() {
                 pb.message(&(crate_info.name));
 
                 if let Err(e) =
-                    fetch_crate(&mut downloader, &crate_info.name, &crate_info.version_num)
+                    fetch_crate(&mut downloader, CRATESDIR, &crate_info.name, &crate_info.version_num)
                 {
                     warn!("Thread {}: Fetch fails: crate {:?}, {}", i, crate_info, e);
                     store_fails_info(Arc::clone(&conn), crate_info);
-                } else if let Err(e) = deal_with_crate(&crate_info) {
+                } else if let Err(e) = deal_with_crate(CRATESDIR, &crate_info.name, &crate_info.version_num) {
                     warn!("Thread {}: Unzip fails: crate {:?}, {}", i, crate_info, e);
                     store_fails_info(Arc::clone(&conn), crate_info);
                 } else {
@@ -182,39 +182,6 @@ pub fn find_undownloaded_crates(conn: Arc<Mutex<Client>>) -> Vec<CrateInfo> {
         .collect()
 }
 
-pub fn fetch_crate(downloader: &mut Downloader, name: &str, version: &str) -> Result<()> {
-    let mut dls = vec![];
-
-    create_dir(Path::new(&format!("{}/{}", CRATESDIR, name))).unwrap_or_default();
-
-    dls.push(
-        Download::new(&format!(
-            "https://crates.io/api/v1/crates/{name}/{version}/download",
-        ))
-        .file_name(Path::new(&format!("{name}/{version}.tgz"))),
-    );
-
-    let res = downloader.download(&dls)?;
-
-    if res.first().unwrap().is_err() {
-        return Err(anyhow!("Download error"));
-    }
-
-    return Ok(());
-}
-
-fn deal_with_crate(crate_info: &CrateInfo) -> io::Result<Output> {
-    let name = &crate_info.name;
-    let version = &crate_info.version_num;
-
-    // Decompress
-    Command::new("tar")
-        .arg("-zxf")
-        .arg(format!("{CRATESDIR}/{name}/{version}.tgz"))
-        .arg("-C")
-        .arg(format!("{CRATESDIR}/{name}"))
-        .output()
-}
 
 pub fn store_fails_info(conn: Arc<Mutex<Client>>, crates: CrateInfo) {
     conn.lock()
