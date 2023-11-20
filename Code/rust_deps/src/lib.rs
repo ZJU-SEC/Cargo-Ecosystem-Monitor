@@ -5,6 +5,7 @@ use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits, ResolveOp
 use cargo::core::{PackageIdSpec, Workspace, Shell, Package, PackageId, Summary, features};
 use cargo::util::{Config, graph};
 use cargo::ops::{self, tree::TreeOptions, Packages};
+use postgres::Client;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env::{self, current_dir};
@@ -12,8 +13,19 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 use std::result::Result::Ok;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+
+pub mod util;
+
+
+pub struct VersionInfo {
+    version_id: i32,
+    crate_id: i32,
+    name: String,
+    num: String,
+}
 
 
 /// Resolve version's dependencies.
@@ -209,7 +221,7 @@ pub fn resolve_deps_of_version_once_full(
     Ok(format!("{:?}", resolve))
 }
 
-fn format_virt_toml_file(name: &String, version_num: &String, features: &Vec<&str>) -> String {
+pub fn format_virt_toml_file(name: &String, version_num: &String, features: &Vec<&str>) -> String {
     let mut file = String::from(
         r#"[package]
 name = "dep"
