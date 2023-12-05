@@ -1,10 +1,7 @@
-use cargo::core::compiler::{CompileKind, RustcTargetData};
-use cargo::core::dependency::DepKind;
 use cargo::core::registry::PackageRegistry;
-use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits, ResolveOpts};
-use cargo::core::{PackageIdSpec, Workspace, Shell, Package, PackageId, Summary};
-use cargo::ops::tree::{Target, EdgeKind, Prefix, Charset};
-use cargo::ops::{self, tree::TreeOptions, Packages};
+use cargo::core::resolver::{CliFeatures, HasDevUnits};
+use cargo::core::{Workspace, Shell};
+use cargo::ops;
 use cargo::util::Config;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -32,6 +29,10 @@ pub struct VersionInfo {
 
 pub const THREAD_DATA_SIZE: i64 = 50;
 pub const RERESOLVE_DATA_SIZE: i64 = 20;
+
+// Suffix of DB, used for test and other purposes.
+// It is empty by default. If it is not, it is not used for general purposes.
+pub const DB_SUFFIX: &str = "";
 
 
 /// Main Operation
@@ -130,9 +131,9 @@ pub fn run_deps(workers: usize, status: &str) {
         let conn = Arc::clone(&conn);
         let query = format!(
             r#"SELECT id,crate_id,name,num FROM versions_with_name WHERE id in (
-                SELECT version_id FROM deps_process_status WHERE status='{}' ORDER BY version_id asc LIMIT {}
+                SELECT version_id FROM deps_process_status{DB_SUFFIX} WHERE status='{}' ORDER BY version_id asc LIMIT {}
                 )"#,
-            status, THREAD_DATA_SIZE
+                status, THREAD_DATA_SIZE
         );
 
         let rows = conn.lock().unwrap().query(&query, &[]).unwrap();
@@ -141,8 +142,8 @@ pub fn run_deps(workers: usize, status: &str) {
             break;
         } else {
             let query = format!(
-                r#"UPDATE deps_process_status SET status='processing' WHERE version_id IN (
-                    SELECT version_id FROM deps_process_status WHERE status='{}' ORDER BY version_id asc LIMIT {}
+                r#"UPDATE deps_process_status{DB_SUFFIX} SET status='processing' WHERE version_id IN (
+                    SELECT version_id FROM deps_process_status{DB_SUFFIX} WHERE status='{}' ORDER BY version_id asc LIMIT {}
                 )"#,
                 status, THREAD_DATA_SIZE
             );
@@ -255,13 +256,13 @@ fn resolve(
     res
 }
 
-fn update_process_status(conn: Arc<Mutex<Client>>, version_id: i32, status: &str){
+pub fn update_process_status(conn: Arc<Mutex<Client>>, version_id: i32, status: &str){
     // warn!("update status");
     conn.lock()
         .unwrap()
         .query(
             &format!(
-                "UPDATE deps_process_status SET status = '{}' WHERE version_id = '{}';",
+                "UPDATE deps_process_status{DB_SUFFIX} SET status = '{}' WHERE version_id = '{}';",
                 status, version_id
             ),
             &[],
@@ -391,7 +392,7 @@ fn resolve_store_deps_of_version(
 
     // Store dep info into DB.
     if !set.is_empty() {
-        let mut query = String::from("INSERT INTO dep_version VALUES");
+        let mut query = format!("INSERT INTO dep_version{DB_SUFFIX} VALUES");
         for (version_to, level) in set {
             query.push_str(&format!("({}, {}, {}),", version_id, version_to, level,));
         }
@@ -403,68 +404,68 @@ fn resolve_store_deps_of_version(
     Ok(())
 }
 
-fn prebuild_db_table(conn: Arc<Mutex<Client>>){
+pub fn prebuild_db_table(conn: Arc<Mutex<Client>>){
     conn.lock()
     .unwrap()
     .query(
-        r#"CREATE TABLE IF NOT EXISTS dep_version(
+        &format!(r#"CREATE TABLE IF NOT EXISTS dep_version{DB_SUFFIX}(
                     version_from INT,
                     version_to INT,
                     dep_level INT,
-                    UNIQUE(version_from, version_to, dep_level))"#,
+                    UNIQUE(version_from, version_to, dep_level))"#),
         &[],
     )
     .unwrap_or_default();
     conn.lock()
         .unwrap()
         .query(
-            r#"CREATE TABLE IF NOT EXISTS public.dep_errors
+            &format!(r#"CREATE TABLE IF NOT EXISTS public.dep_errors{DB_SUFFIX}
             (
                 ver integer,
                 is_panic boolean,
                 error text COLLATE pg_catalog."default",
                 CONSTRAINT dep_errors_ver_is_panic_error_key UNIQUE (ver, is_panic, error)
-            )"#,
+            )"#),
             &[],
         )
         .unwrap_or_default();
-    conn.lock().unwrap().query(r#"CREATE VIEW versions_with_name as (
+    conn.lock().unwrap().query(&format!(r#"CREATE VIEW versions_with_name as (
         SELECT versions.*, crates.name FROM versions INNER JOIN crates ON versions.crate_id = crates.id
-        )"#, &[]).unwrap_or_default();
+        )"#), &[]).unwrap_or_default();
     // Crate resolution process
     conn.lock()
         .unwrap()
         .query(
-            r#"CREATE TABLE IF NOT EXISTS public.deps_process_status
+            &format!(r#"CREATE TABLE IF NOT EXISTS public.deps_process_status{DB_SUFFIX}
             (
                 version_id INT,
                 status VARCHAR
-            )"#,
+            )"#),
             &[],
         )
         .unwrap();
     // Check if table is empty
     if conn.lock().unwrap().query(
-            "SELECT * FROM deps_process_status LIMIT 1",
+        &format!("SELECT * FROM deps_process_status{DB_SUFFIX} LIMIT 1"),
             &[],
         ).unwrap().first().is_none()
     {
         conn.lock().unwrap()
-            .query("
+            .query(&format!("
                 WITH ver_dep AS
                         (SELECT DISTINCT version_id as ver FROM dependencies WHERE kind != 2)
-                INSERT INTO public.deps_process_status 
+                INSERT INTO public.deps_process_status{DB_SUFFIX} 
                     SELECT ver, 'undone' FROM ver_dep
                     WHERE ver NOT IN (SELECT id FROM versions WHERE yanked = true)
-                    AND ver NOT IN (SELECT DISTINCT ver FROM dep_errors)
-                    AND ver NOT IN (SELECT DISTINCT version_from FROM dep_version)",
+                    AND ver NOT IN (SELECT DISTINCT ver FROM dep_errors{DB_SUFFIX})
+                    AND ver NOT IN (SELECT DISTINCT version_from FROM dep_version{DB_SUFFIX})"),
                 &[],
             ).unwrap();
     }
     else{
         let query = format!(
-            r#"UPDATE deps_process_status SET status='undone' WHERE version_id IN (
-                SELECT version_id FROM deps_process_status WHERE status='processing'
+            r#"UPDATE deps_process_status{DB_SUFFIX} SET status='undone' WHERE version_id IN (
+                SELECT version_id FROM deps_process_status{DB_SUFFIX} WHERE status='processing'
             )"#
         );
         conn.lock().unwrap().query(&query, &[]).unwrap();
@@ -475,7 +476,7 @@ pub fn get_ver_name_table(conn: Arc<Mutex<Client>>) -> HashMap<(String, String),
     let rows = conn.lock()
     .unwrap()
     .query(
-        r#"SELECT id, crate_id, num ,name FROM versions_with_name"#,
+        &format!(r#"SELECT id, crate_id, num ,name FROM versions_with_name"#),
         &[],
     ).unwrap();
     // <(name, num), version_id>
@@ -644,7 +645,9 @@ fn get_version_by_name_version(conn: Arc<Mutex<Client>>, name: &str, version: &s
         .get(0))
 }
 
-fn get_version_by_name_version_test(table: Arc<HashMap<(String, String), i32>>, name: &str, version: &str) -> Result<i32> {
+
+// Although it is marked as `test`, it performs better than the original code. We will do code refactor later.
+pub fn get_version_by_name_version_test(table: Arc<HashMap<(String, String), i32>>, name: &str, version: &str) -> Result<i32> {
     Ok(
         table.get(&(name.to_string(), version.to_string()))
             .context("Can't get version_id")?
@@ -657,10 +660,10 @@ fn get_version_by_name_version_test(table: Arc<HashMap<(String, String), i32>>, 
 /// ```
 /// store_resolve_error(conn, 362968, false, String::new("Error"));
 /// ```
-fn store_resolve_error(conn: Arc<Mutex<Client>>, version: i32, is_panic: bool, message: String) {
+pub fn store_resolve_error(conn: Arc<Mutex<Client>>, version: i32, is_panic: bool, message: String) {
     let message = message.replace("'", "''");
     let query = format! {
-        "INSERT INTO dep_errors(ver, is_panic, error) VALUES ({}, {:?}, '{}');",
+        "INSERT INTO dep_errors{DB_SUFFIX}(ver, is_panic, error) VALUES ({}, {:?}, '{}');",
         version, is_panic, message
     };
     conn.lock().unwrap().query(&query, &[]).unwrap_or_default();
@@ -821,16 +824,17 @@ fn resolve_test() -> io::Result<()> {
     )
     .unwrap();
 
-    let mut count_dep = 0;
-    for pkg in resolve.iter() {
-        let dep_num = resolve.deps(pkg).count();
-        let dep_name = pkg.name().to_string();
-        println!("{dep_name} + {dep_num}");
-        count_dep += dep_num;
-    }
-    count_dep -= 1; // Remove pkg 'dep' (our virtual pkg).
-    println!("{:#?}", resolve);
-    println!("Dep count: {}", count_dep);
+    // // Count Deps
+    // let mut count_dep = 0;
+    // for pkg in resolve.iter() {
+    //     let dep_num = resolve.deps(pkg).count();
+    //     let dep_name = pkg.name().to_string();
+    //     println!("{dep_name} + {dep_num}");
+    //     count_dep += dep_num;
+    // }
+    // count_dep -= 1; // Remove pkg 'dep' (our virtual pkg).
+    // println!("{:#?}", resolve);
+    // println!("Dep count: {}", count_dep);
 
     // {
     //     let R = "clang-sys";
