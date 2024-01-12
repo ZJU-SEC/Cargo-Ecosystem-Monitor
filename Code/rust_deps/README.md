@@ -1,18 +1,10 @@
-**Set up local registry**
 
-0. Build your Crates.io DB (As told in root directory Readme file)
+# Rust Ecosystem Dependency Graph Generator
 
-Get to [crates.io website](https://crates.io/data-access) and follows Step 2. The README.md in it will tell you how to set up your DB.
+### Build projects
 
-1. Clone remote registry (As told in root directory Readme file)
 
-```bash
-git clone https://github.com/rust-lang/crates.io-index
-```
-
-And you should change the git commits date according to your DB, in file `metadata.json` of your db-dump file. This makes the index corresponding to your DB.
-
-2. Change .cargo/config.toml
+1. Change `registry` path in `./.cargo/config.toml` to absolute path to your `crates.io-index`. It should be in the root directory of `Cargo-Ecosystem-Monitor`. If you are using our dockerfile for replication, the default `config.toml` file has been set to the right value. You can ignore this step.
 
 ```
 [net]
@@ -25,22 +17,28 @@ registry = "file:///absolute/path/to/crates.io-index/dir"
 replace-with = "mirror"
 ```
 
-3. Clear your Cache
+
+2. Run `cargo run`!
+
+It's OK if you cancel the running process. You can run it again. You won't lost results we have generated. The resolution process will continue.
+
+Be sure that you have correctly set up your database according to our guide in the project root directory. Moreover, if you can't connect to the database, there might be sth wrong with the connection, including port(sometimes 5432, and sometimes 5434) and else.
+
+If you have changed the registry or other ecosystem metadata, you should clear related cache info. In the replication process, this will not happen.
+
+
+1. Clear your Cache
 
 If you have run this tool, there will be multiple `dep*.toml` file and `job*`  directory, you should delete them all before you start your process.
 
-4. Clear your built tables
+2. Clear your built tables
 
 If you have run this tool, there will be extra tables in DB which are old. You should drop all these tables.
 
 
-5. Run `cargo run`!
-
-Be sure that you have corretly set up your database according to our guide in the project root directory. Moreover, if you can't connect to database, there might be sth wrong with the connection, including port(sometimes 5432, and sometimes 5434) and else.
-
 ### Architecture
 
-We seperate several threads to resolve crates. The main thread will:
+We separate several threads to resolve crates. The main thread will:
 
 1. Find max crate_id that resolved now, and plus one, which makes it possible that max resolved crate is not fully resolved.
 2. Create resolution threads first. The threads will catch panic and store resolution errors. During the resolution process, the threads will wait for the main thread to send `version_info` vector that represents unresolved crates.
