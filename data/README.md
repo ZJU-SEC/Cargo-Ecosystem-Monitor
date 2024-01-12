@@ -1,0 +1,1 @@
+Stores local data.

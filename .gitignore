@@ -1,8 +1,7 @@
 .DS_Store
-data/*
 test/*
 */Cargo.lock
 */__pycache__
 */target
 ./.vscode/*
-data
+./data/*
