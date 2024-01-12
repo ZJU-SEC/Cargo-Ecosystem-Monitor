@@ -4,4 +4,4 @@ test/*
 */__pycache__
 */target
 ./.vscode/*
-./data/*
+data/*
