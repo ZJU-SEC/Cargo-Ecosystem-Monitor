@@ -6,15 +6,20 @@ We spawn 20 threads for processing by default.
 
 ### Preliminaries
 
-This project needs pre-downloaded crates source code in path `CRATESDIR` (configured in `main.rs`), and modified Rust compiler in path `RUSTC` (configured in `util.rs`). Make sure they are prepared.
+This project needs pre-downloaded crates source code in path `CRATESDIR` (configured in `main.rs`), and the modified Rust compiler in path `RUSTC` (configured in `util.rs`). Make sure they are prepared.
 
-To pre-download source codes of all crates, you can use project "crate_downloader" in the parent directory. Modified Rust compiler is in root directory of Cargo Ecosystem Monitor.
+To pre-download source codes of all crates, you can use project `crate_downloader` in the parent directory. The modified Rust compiler is in `Cargo-Ecosystem-Monitor/rust`. Follow the readme file there to build the compiler.
+
+The `CRATESDIR` and `RUSTC` values are set according to our dockerfile structure by default. If you are replicating our research results using our dockerfile, you do not need to change them. But you have to run preliminary projects.
 
 ### Usage
 
-Online usage will download crates online while processing. In offline mode, we will use downloaded crates source code stored in path `CRATESDIR`.
+Online usage will download crates online while processing. In offline mode, we will use the downloaded crates source code stored in path `CRATESDIR`.
 
-Offline mode is enabled by default. You should change `CRATESDIR` to your own path. 
+Offline mode is enabled by default. You do not need to change it in common cases.
+
+
+Run `cargo run` in your shell to start.
 
 #### Online
 To run online, please config `main.rs`:
