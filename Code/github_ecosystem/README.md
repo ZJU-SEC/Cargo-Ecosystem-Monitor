@@ -7,14 +7,50 @@ Beyond Cargo projects, we decide to move on to Rust projects in GitHub to explor
 Run Python scripts to download and analyze the top 100 Rust projects (by starts) in GitHub.
 
 ```Shell
-python3 ruf_usage_hot_rust_projects.py
+# download
+python3 ruf_usage_hot_rust_projects.py download_hot_projects
+# analyze ruf usage of the projects
+python3 ruf_usage_hot_rust_projects.py ruf_usage
+# configure your cargo config and run
+python3 ruf_usage_hot_rust_projects.py ruf_impacts
+# remove cargo config
 ```
 
-We also do case study on three influential projects (Rust for Linux, Android Open Source Project, Firefox) and analyze Rust codes in them.
+To make our results reproducible, we changed crates.io index to a fixed version (2022-08-11). You have to configure it before running ruf_impacts, and remove them after running successfully. Please backup your cargo config in `~/.cargo/Cargo.toml` first. After running ruf_impacts, you should restore your config.
+
+
+1. Override configuration to file `~/.cargo/config.toml` with 
+```Rust
+[net]
+git-fetch-with-cli = true
+
+[source.cargo_ecosystem_monitor]
+registry = "file:///absolute/path/to/crates.io-index/dir" 
+
+[source.crates-io]
+replace-with = "cargo_ecosystem_monitor"
+```
+2. If you are using the provided docker, you can directly run `make replace_cargo_mirror` before running the evaluation process. And after the evaluation process, run `make restore_cargo_mirror` to remove the configurations. Make sure you know what is going to happen when you run it in your host machine.
+
+```Shell
+# Configure
+make replace_cargo_mirror
+# Remove
+make restore_cargo_mirror
+```
+
+
+
+We also do case studies on three influential projects (Rust for Linux, Android Open Source Project, Firefox) and analyze Rust codes in them. You need to first download them and then run the scripts below.
+
+```Shell
+python3 ruf_usage_hot_rust_projects.py case_study
+```
+
 
 ### Case Study
 
-We analyze three influential projects that contain Rust code.
+We analyze three influential projects that contain Rust code, Android Open Source Project (AOSP), Firefox, Rust for Linux.
 
 
 #### Android
@@ -37,7 +73,7 @@ def print(self, *args, **kwargs):
 SyntaxError: invalid syntax
 ```
 
-You can edit file `xxx/bin/repo` to change `#!/usr/bin/env python` to `#!/usr/bin/env python3`. After that, follow the instructions in https://source.android.com/docs/setup/download/downloading. Be sure to download under the directory `./AOSP`.
+You can edit file `xxx/bin/repo` to change `#!/usr/bin/env python` to `#!/usr/bin/env python3`. After that, follow the instructions at https://source.android.com/docs/setup/download/downloading. Be sure to download it under the directory `./AOSP`.
 
 Under directory `./AOSP`, run command
 
