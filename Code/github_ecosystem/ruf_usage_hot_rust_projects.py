@@ -11,7 +11,7 @@ output_dir = './projects'
 time = '2022-08-11 00:00:00 +0000'
 analyze_path = '/home/loancold/Projects/Cargo-Ecosystem-Monitor/Cargo-Ecosystem-Monitor/rust/build/x86_64-unknown-linux-gnu/stage1/bin/rustc' # The path of our ruf usage analyzer (modified rustc)
 # case_study_paths = ['./Rust4Linux/linux', './AOSP', './Firefox/mozilla-unified']
-case_study_paths = ['/home/loancold/Projects/rust4linux_newest', './AOSP', './Firefox/mozilla-unified']
+case_study_paths = ['./AOSP', './Firefox/git_firefox', './Rust4Linux/linux']
 
 conn = psycopg2.connect(
     host="localhost",
@@ -104,6 +104,7 @@ def get_dependency_tree(toml_path: str) -> dict:
                 toml = toml.replace('[workspace]', '[workspace]\nresolver = "2"')
                 f.write(toml)
     dependency_trees = dict()
+    subprocess.run(['cargo', 'update', '--manifest-path', toml_path], stdout=subprocess.PIPE).stdout.decode('utf-8')
     dependency_results = subprocess.run(['cargo', 'tree', '--manifest-path', toml_path, '-e', 'no-dev', '--all-features', '--target', 'all', '-f','"{p} {f}"'], stdout=subprocess.PIPE).stdout.decode('utf-8')
     # print('---------dependency_results----------')
     # print(dependency_results)
@@ -241,14 +242,20 @@ def test_reset_all_project_change():
 
 def case_study_projects():
     ruf_usage = dict()
-    absolute_output_dir = os.getcwd() + '/' + output_dir
+    absolute_output_dir = os.getcwd()
     for dir in case_study_paths:
         project_name = dir
         if dir[0] == '/': # absolute path
             target_dir = dir
         else:
             target_dir = f'{absolute_output_dir}/{dir}'
-        for file_name in glob(target_dir + '/**/*.rs', recursive=True):
+        print(f'Analyzing {target_dir}')
+        files = subprocess.run(['find', target_dir, '-type', 'f', '-name', '*.rs'], stdout=subprocess.PIPE).stdout.decode('utf-8')
+        count = 0
+        total = len(files.split('\n'))
+        for file_name in files.split('\n'):
+            count += 1
+            print(f'Analyzing {count}/{total}: {file_name}')
             if 'test' in file_name:
                 continue
             results = subprocess.run([analyze_path, file_name, '--edition', '2021', '--ruf-analysis'], stdout=subprocess.PIPE).stdout.decode('utf-8')
@@ -261,15 +268,29 @@ def case_study_projects():
                     if not ruf_usage.get(project_name):
                         ruf_usage[project_name] = set()
                     ruf_usage[project_name].add(ruf)
-        print(f'{project_name}: {ruf_usage[project_name]}')
+    for project_name in ruf_usage:
+        print(f'{project_name}({len(ruf_usage[project_name])}): {ruf_usage[project_name]}')
 
 
-# url_list = parse_top_projects(target_file_name)
-download_github_projects(url_list)
-checkout_to_time()
-analyze_github_projects()
-pre_analyze_toml()
-test_reset_all_project_change()
-project_dependency_impacts()
-# test_dependency_tree()
-# case_study_projects()
+import sys
+
+if len(sys.argv) < 2:
+    print('Usage: python3 ruf_usage_hot_rust_projects.py [download_hot_projects | reset_all_project_change | ruf_usage | ruf_impacts | case_study]')
+    exit()
+if sys.argv[1] == 'download_hot_projects':
+    url_list = parse_top_projects(target_file_name)
+    download_github_projects(url_list)
+    checkout_to_time()
+elif sys.argv[1] == 'reset_all_project_change':
+    test_reset_all_project_change()
+elif sys.argv[1] == 'ruf_usage':
+    analyze_github_projects()
+elif sys.argv[1] == 'ruf_impacts':
+    print('Reminder: You need to first correctly configure your crates.io index database before resolving dependencies.')
+    project_dependency_impacts()
+elif sys.argv[1] == 'case_study':
+    case_study_projects()
+else:
+    print('Invalid command')
+    print('Usage: python3 ruf_usage_hot_rust_projects.py [download_hot_projects | reset_all_project_change | ruf_usage | ruf_impacts | case_study]')
+
