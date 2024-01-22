@@ -1,6 +1,6 @@
 # Cargo-Ecosystem-Monitor
 
-Rust ecosystem analysis, mainly Cargo ecosystem.
+Rust ecosystem analysis, mainly the Cargo ecosystem.
 
 ## Motivation
 
@@ -28,7 +28,7 @@ By resolving the above challenges, we design and implement RUF extractor to extr
 We identify the semantics of RUF configuration defined by developers for precise RUF impact analysis.
 To quantify RUF impacts over the whole Rust ecosystem, we define factors that affect impact propagation and generate a precise EDG for the entire Rust ecosystem (2022-08-11).
 
-We analyzed all Rust compiler versions and obtained 1,875 RUF. We further analyzed all packages on the official package database crates.io and resolve 592,183 package versions to get 139,525,225 direct and transitive dependencies and 182,026 RUF configurations. 
+We analyzed all Rust compiler versions and obtained 1,875 RUF. We further analyzed all packages on the official package database crates.io and resolve d592,183 package versions to get 139,525,225 direct and transitive dependencies and 182,026 RUF configurations. 
 
 Our highlighted findings are: 1) About half of RUF (47\%) are not stabilized in the latest version of the Rust compiler;
 2) Through dependency propagation, RUF can impact 259,540(44\%) package versions, causing at most 70,913 (12\%) versions suffer from compilation failure. To mitigate wide RUF impacts, we further design and implement the RUF compilation failure recovery tool that can recover up to 90% of the failure. We believe our techniques, findings, and tools can help to stabilize the Rust compiler, ultimately enhancing the security and reliability of the Rust ecosystem.
@@ -49,7 +49,7 @@ Refer to [Reproduce Our Results](#reproduce-our-results) section for more detail
 
 #### Local Build (Developing)
 
-Before running them, we have to build external environment as follows. Some of them can be done using scripts, but the others need manual work. You can use our `Makefile` for help, but you can't imagine that it will complete all the tasks. At the same time, we also provide dockerfile and docker image to build neccessary runtime environment and dependencies to build our projects. You can either build in your host machine or leverage docker to achieve this. 
+Before running them, we have to build an external environment as follows. Some of them can be done using scripts, but the others need manual work. You can use our `Makefile` for help, but you can't imagine that it will complete all the tasks. At the same time, we also provide dockerfile and docker image to build neccessary runtime environment and dependencies to build our projects. You can either build in your host machine or leverage docker to achieve this. 
 
 The setup process roughly includes steps as follows:
 
@@ -63,6 +63,7 @@ The setup process roughly includes steps as follows:
 ### Reproduce Our Results
 
 Make sure that your processor(6+ cores), memory size(16+GB) and disk size (5GB for database maintenance, 50+GB for build, 1TB for ecosystem source code) are powerful enough, as we need to compile Rust compiler and analyze the entire ecosystem. 
+Refer to [postgresql guide](#quick-guide-to-postgresql) section if you are not familiar with the Postgresql usage.
 
 #### Using Ecosystem Raw Data
 
@@ -123,7 +124,7 @@ SELECT status, COUNT(*) FROM version_feature_ori INNER JOIN feature_status ON na
 
 #### Using Ecosystem Metadata
 
-The entire process may take 2 days as we need to resolve ecosystem dependency graph and download all source codes of the ecosystem. To build our projects and generate raw data from scratch, you should do something more. First, you should download [ecosystem metadata 2022-08-11](https://drive.google.com/file/d/1-2oamGvhUOT4fIJlYB2e8PN9D_thHcmK/view?usp=sharing) under `./data` directory. The command lines should be like:
+The entire process may take 2 days as we need to resolve the ecosystem dependency graph and download all source codes of the ecosystem. To build our projects and generate raw data from scratch, you should do something more. First, you should download [ecosystem metadata 2022-08-11](https://drive.google.com/file/d/1-2oamGvhUOT4fIJlYB2e8PN9D_thHcmK/view?usp=sharing) under `./data` directory. The command lines should be like:
 
 ```Shell
 # Clone git submodule
@@ -146,7 +147,7 @@ make database
 
 You can access the postgresql database `crates` from port `12345` in the host machine as user `postgres` with password `postgres`.
 
-After setting all the runtime environment and dependencies, you can access to our tools based on the README files. Refer to sub-projects overview [readme file](./Code/README.md) for detailed usage guidance.
+After setting all the runtime environment and dependencies, you can access to our tools based on the README files. Refer to the sub-project overview [readme](./Code/README.md) file](./Code/README.md) for detailed usage guidance.
 
 
 ### Appendix
@@ -170,6 +171,41 @@ Beyond the RUF study, our tools, scripts, and data can be extended for further r
 3. Dependency Conflict: During the Ecosystem Dependency Graph generation process, we discovered that many packages are suffering from dependency resolution failure due to yanked packages or improper dependency configurations. We have analyzed some of them manually and found that the dependency conflict can be somehow recovered by modifying the dependency configurations. Moreover, we discovered some unstable dependency configurations that can easily cause packages to fail the dependency resolution. More dependency resolution findings are under research.
 
 The extensibility of our technique reveals the significance of our proposed new technique, and we hope researchers can make benefit of our open-source data and tools to analyze the Rust ecosystem and the Rust compiler.
+
+
+#### Quick Guide to Postgresql
+
+We recommend three ways to use Postgresql.
+
+1. Shell
+   - Postgresql supports shell commands using `psql`. For example, to access our research results, you can use the command `psql -U postgres -d crates` to enter database `crates` as user `postgres`.
+    
+    ```Shell
+    > psql -U postgres -d crates
+    Password for user postgres: # Type your passwoard (default `postgres`)
+    psql (15.4 (Ubuntu 15.4-1.pgdg20.04+1), server 14.9 (Ubuntu 14.9-1.pgdg20.04+1))
+    Type "help" for help.
+
+    crates=# 
+    ```
+
+    - Now you can type your Postgresql commands to access the database. For example, if you want to search for the latest RUF status. You can run the command below after entering the database.
+
+    ```
+    crates=# SELECT count(*), v1_63_0 as status FROM feature_timeline GROUP BY v1_63_0;
+    count |   status   
+    -------+------------
+      241 | 
+      562 | active
+       11 | incomplete
+     1002 | accepted
+       59 | removed
+    (5 rows)
+    ```
+2. VSCode Plugin
+   - Search for the plugin `PostgreSQL` in your VSCode, and add connection to our database. Follow the instructions given by the plugin, and you can access and modify our database in your VSCode.
+3. Desktop APP
+   - You can use desktop APPs like `pgAdmin` to manage your Postgresql.
 
 
 #### Common Build Problems
