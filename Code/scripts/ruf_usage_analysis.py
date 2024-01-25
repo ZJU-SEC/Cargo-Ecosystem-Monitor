@@ -1,11 +1,12 @@
 from datetime import timedelta
+import json
 
 from utils import *
 from utils_DB import *
 
 
 
-def ruf_usage_lifetime():
+def ruf_usage_lifetime(dump_file):
     '''
     Main function.
     We mainly analyze how RUF is used by developers and how they maintain the RUF.
@@ -21,12 +22,12 @@ def ruf_usage_lifetime():
         How many versions are still suffer? This is the critical point in semver-based ecosytem. 
     '''
     # 0. Overview
-    ruf_usage_popular_crates()
-    ruf_usage_intra_crate_evolution()
-    ruf_usage_inter_crate_evolution()
+    # ruf_usage_popular_crates()
+    # ruf_usage_intra_crate_evolution()
+    # ruf_usage_inter_crate_evolution()
 
     # 1. RUF Change <-> Usage Change
-    ruf_change_analysis()
+    ruf_change_analysis(dump_file)
     
 
 
@@ -182,36 +183,49 @@ def ruf_mismatch_overview():
 
 
 
-def ruf_change_analysis():
+def ruf_change_analysis(dump_file):
     '''
     RUF Change -> Usage Change
-    Transition reaction delay. How long does it take for crates to react to RUF change?
+    How long does it take for crates to react to RUF change?
+    For example, when RUF is removed, how long does it take for crates to remove RUF usage after the status change?
+    The RUF usage delay compared to RUF status change can represents how actively developers maintain the RUF usage.
 
     ```
-                                                Tran Point          Tran Point
-                                                    |                 |
-    RUF Lifetime (By Release Version)           A A A | B B B ... B B B | C C C
-    RUF Usage (By Crate Version Release Time)   ...a a a a a a ... b b b x x x x
-                                                     └───────────────┘
-                                                    Usage Inspect Window
+                                                       Inspect Window                              Inspect Window  
+                                                    ┌───────────────────┐                          ┌────────────┐
+                                                Tran Point(i)        Tran Point(i+1)    Tran Point(i)        Tran Point(i+1)
+                                                    |                   |                   |                   |
+    RUF Lifetime (By Compiler Version)          U U U | R R R ..... R R R | U U U       U U U | R R R ..... R R R | U U U
+    RUF Usage (By Crate Version Release Time)   ...y y y y ... y n ... n n n ...        ...n n n n y y ... y y y y ...
+                                                   |│          | │                                 |            │
+                                                  v_j         v_k│                                v_j           │
+                                                    └────────────┘                                 └────────────┘
+                                                  Usage Change Delay                              Usage Change Delay
     ```
+    Transition Point: If the RUF status changes in next compiler version, the current version is a RUF status transition point.
+                      If the RUF status is in removed status in the first version, we add a transition point at the beginning.
+    Inspect Window: The inspect window reprensent the time window, during which the crate changes the RUF usage in response to the first RUF status transition point. 
+                    In the inspect window, we analyze when the crate removes its RUF usage, and the delay compared to the first RUF status transition point or the first time using the RUF.
+                    The shorter the delay, the more actively the crate maintains its RUF usage.
+                    Inspect window includes all versions of a package that are released between two adjacent transition points, including the latest version before the first transition point.
+                    The inspect window starts from the first version using RUF, and ends at the release time of the second transition point.
+                    Max(TP(i), v_j) -> TP(i+1)
+    Usage Change Delay: Min(TP(i+1), v_{k+1}) - Max(TP(i), v_j)
     RUF Status:                     Stable  , Unstable (+Incomplete), Removed (+Unknown)
     Ideal corresponding RUF Usage:  No      , Yes (or No)           , No
     
     Algorithm:
-    1. We first find RUF transition point (A-> B, B-> C) by release version.
-    2. Then we try to find RUF usage transition point (a-> b).
+    1. We first find RUF transition point by compiler version.
+    2. Then for each crate using the RUF, we try to find .
     3. Analysis
-        Target Issues: Divide by transition forms. Each represents different problems.
-                1. Unstable -> Stable. Forced nighlty compiler.
-                2. Unstable -> Removed. Compilation failure.
-                3. Extremely abnormal sequence. Seperate analysis. We do not analyze them, as the the problem mainly comes from RUF side.
-                    3.1 Stable -> Unstable. Functionality breaks. Need to add RUF usage.
-                    3.2 Stable -> Removed. Nothing special.
+        Target Issues: Divide by status between transition points, each represents different problems.
+                1. Stable (Accepted). Forced nighlty compiler and unnecessary usage.
+                2. Removed (Removed + Unknown). Compilation failure.
+                3. Unstable (Active + Incomplete). Forced nighlty compiler and unstable functionatility.
         Pattern: Divide by usage change.
-                1. RUF Unstable->Stable. Usage Yes -> No. Usage Repair.
-                2. RUF Unstable->Removed. Usage Yes -> No. Usage Revoke.
-                3. Unstable-Unstable. Usage Yes -> No. Usage Remove.
+                1. Stable (Accepted). Usage Yes -> No. Usage Repair.
+                2. Removed (Removed + Unknown). Usage Yes -> No. Usage Revoke.
+                3. Unstable (Active + Incomplete). Usage Yes -> No. Usage Remove.
     4. 2022-08-11 Result:
         Overview: The packages react poorly to RUF change. They do not actively detect and repair RUF.
     '''
@@ -230,12 +244,18 @@ def ruf_change_analysis():
     usage_not_repair_count = 0
     usage_not_revoke_count = 0
     usage_not_remove_count = 0
+    usage_tran_time = timedelta(days=0)
+    usage_inspect_window_time = timedelta(days=0)
     usage_repair_time = timedelta(days=0)
     usage_revoke_time = timedelta(days=0)
     usage_remove_time = timedelta(days=0)
+    usage_tran_time_distribution = dict()
     usage_repair_time_distribution = dict()
     usage_revoke_time_distribution = dict()
     usage_remove_time_distribution = dict()
+    usage_tran_repair_distribution = dict()
+    usage_tran_revoke_distribution = dict()
+    usage_tran_remove_distribution = dict()
     for ruf in ruf_lifetime:
         lifetime = ruf_lifetime[ruf]
         # 1. Find RUF transition point
@@ -248,13 +268,13 @@ def ruf_change_analysis():
             after = RUF_STATUS.get(lifetime[i+1], 'Removed')
             if before != after:
                 transition_points.append((i, before + '->' + after))
-        transition_points.append((len(lifetime), 'End'))
+        transition_points.append((len(lifetime)-1, 'End'))
         if len(transition_points) <= 1:
             continue
         print(f"\nRUF {ruf} transition points: {transition_points}")
-        # 2. Analysis
         crates = get_crates_by_used_ruf_DB(ruf)
         for crate_id in crates:
+            # 2. Get insepct window
             inspect_window = list() # [[<version>, <usage>]] index [i][j] means the jth version of ith window.
             versions_date = get_crate_versions_created_time_asc_DB(crate_id)
             is_all_not_used = True
@@ -262,21 +282,21 @@ def ruf_change_analysis():
                 # Find Usage Inspect Window
                 inspect_window.append(list())
                 start_date = version_to_date(transition_points[i][0])
-                start_version_idx = 0
+                end_date = version_to_date(transition_points[i+1][0])
+                start_version_idx = len(versions_date)
+                end_version_idx = len(versions_date)
                 for idx in range(len(versions_date)):
                     (version, date) = versions_date[idx]
                     if date > start_date:
-                        start_version_idx = idx
+                        start_version_idx = max(idx-1 , 0)
                         break
-                end_date = version_to_date(transition_points[i+1][0])
-                end_version_idx = len(versions_date) - 1
                 for idx in range(len(versions_date)):
                     (version, date) = versions_date[idx]
                     if date > end_date:
-                        end_version_idx = max(idx - 1, 0)
+                        end_version_idx = idx
                         break
                 # Record Inspect Window Usage
-                for idx in range(start_version_idx, end_version_idx+1):
+                for idx in range(start_version_idx, end_version_idx):
                     (version, date) = versions_date[idx]
                     rufs = get_used_ruf_by_versionid_DB(version)
                     ruf_usage = 'No'
@@ -284,53 +304,82 @@ def ruf_change_analysis():
                         ruf_usage = 'Yes'
                         is_all_not_used = False
                     inspect_window[i].append((version, ruf_usage))
-            # Analyze `transition_points` and `inspect_window
+                # if crate_id == 1779:
+                #     print(f'Transition point: {start_date} to {end_date}')
+                #     for idx in range(len(versions_date)):
+                #         (version, date) = versions_date[idx]
+                #         print(date, end=' ')
+                #     print()
+                #     start_version_date = versions_date[start_version_idx][1]
+                #     end_version_date = versions_date[end_version_idx-1][1]
+                #     print(f"Start version date: {start_version_date}, end version date: {end_version_date}")
+            # 3. Analyze `transition_points` and `inspect_window
             print(f"Analyze ruf {ruf} in crate {crate_id}")
             for idx in range(len(transition_points) - 1):
-                usage_count += 1
-
-                start_date = version_to_date(transition_points[i][0])
-                end_date = version_to_date(transition_points[i+1][0])
+                start_date = version_to_date(transition_points[idx][0])
+                end_date = version_to_date(transition_points[idx+1][0])
+                # print(f"Transition point: {start_date} to {end_date}")
+                tran_duration = end_date - start_date
                 tran_type = transition_points[idx][1]
                 first_stable_time = None
+                last_stable_begin_time = None
                 duration_stable_yes = timedelta(days=0)
                 # if tran_type == 'Removed->Unstable':
                 #     continue
                 if len(inspect_window[idx]) == 0:
                     continue
                 # Analyse within inspect window
+                #TODO: Algorithm is wrong. Find way.
                 print(f"Transition point: Crate {crate_id} from version {inspect_window[idx][0]} to {inspect_window[idx][-1]}, ruf {tran_type}")
                 for (version_id, usage) in inspect_window[idx]:
                     version_date = version_created_time[version_id]
+                    if version_date > end_date:
+                        print('Error', crate_id, version_date)
                     if usage == 'Yes' and not first_stable_time:
-                        first_stable_time = version_date
-                    if first_stable_time and usage == 'No':
-                        duration_stable_yes += version_date - first_stable_time
-                        first_stable_time = None
+                        first_stable_time = max(start_date, version_date)
+                    if usage == 'Yes' and not last_stable_begin_time:
+                        last_stable_begin_time = max(start_date, version_date)
+                    if last_stable_begin_time and usage == 'No':
+                        duration_stable_yes += version_date - last_stable_begin_time
+                        last_stable_begin_time = None
                     print(usage, end=' ')
                 print()
+                if last_stable_begin_time:
+                    duration_stable_yes += end_date - last_stable_begin_time
+                # No usage throughout between transition points, skip.
+                if duration_stable_yes == timedelta(days=0):
+                    print(f'No usage throughout between transition points, skip.')
+                    continue
+                usage_count += 1
                 last_usage = inspect_window[idx][-1][1]
-                if first_stable_time:
-                    duration_stable_yes += end_date - first_stable_time
-                if tran_type == 'Unstable->Stable' and duration_stable_yes > timedelta(days=0):
+                usage_tran_time += end_date - start_date
+                usage_inspect_window_time += end_date - first_stable_time
+                usage_tran_time_distribution[tran_duration.days] = usage_tran_time_distribution.get(tran_duration.days, 0) + 1
+                if '->Stable' in tran_type and duration_stable_yes > timedelta(days=0):
                     print(f"Duration Stable Yes: {duration_stable_yes}, final usage {last_usage}")
                     usage_repair_count += 1
                     usage_repair_time += duration_stable_yes
                     usage_repair_time_distribution[duration_stable_yes.days] = usage_repair_time_distribution.get(duration_stable_yes.days, 0) + 1
+                    usage_tran_repair_distribution[tran_duration.days] = usage_tran_repair_distribution.get(tran_duration.days, [])
+                    usage_tran_repair_distribution[tran_duration.days].append(duration_stable_yes.days)
                     if last_usage == 'No':
                         usage_not_repair_count += 1
-                if tran_type == 'Unstable->Removed' and duration_stable_yes > timedelta(days=0):
+                if '->Removed' in tran_type and duration_stable_yes > timedelta(days=0):
                     print(f"Duration Removed Yes: {duration_stable_yes}, final usage {last_usage}")
                     usage_revoke_count += 1
                     usage_revoke_time += duration_stable_yes
                     usage_revoke_time_distribution[duration_stable_yes.days] = usage_revoke_time_distribution.get(duration_stable_yes.days, 0) + 1
+                    usage_tran_revoke_distribution[tran_duration.days] = usage_tran_revoke_distribution.get(tran_duration.days, [])
+                    usage_tran_revoke_distribution[tran_duration.days].append(duration_stable_yes.days)
                     if last_usage == 'No':
                         usage_not_revoke_count += 1
-                if tran_type == 'Removed->Unstable' and duration_stable_yes > timedelta(days=0):
+                if '->Unstable' in tran_type and duration_stable_yes > timedelta(days=0):
                     print(f"Duration Unstable Yes: {duration_stable_yes}, final usage {last_usage}")
                     usage_remove_count += 1
                     usage_remove_time += duration_stable_yes
                     usage_remove_time_distribution[duration_stable_yes.days] = usage_remove_time_distribution.get(duration_stable_yes.days, 0) + 1
+                    usage_tran_remove_distribution[tran_duration.days] = usage_tran_remove_distribution.get(tran_duration.days, [])
+                    usage_tran_remove_distribution[tran_duration.days].append(duration_stable_yes.days)
                     if last_usage == 'No':
                         usage_not_remove_count += 1
     print(f"RUF usage count: {usage_count}")
@@ -340,12 +389,38 @@ def ruf_change_analysis():
     print(f"RUF usage not repair count: {usage_not_repair_count}")
     print(f"RUF usage not revoke count: {usage_not_revoke_count}")
     print(f"RUF usage not remove count: {usage_not_remove_count}")
+    print(f"RUF usage tran time: {usage_tran_time}")
+    print(f"RUF usage inspect window time: {usage_inspect_window_time}")
     print(f"RUF usage repair time: {usage_repair_time}")
     print(f"RUF usage revoke time: {usage_revoke_time}")
     print(f"RUF usage remove time: {usage_remove_time}")
+    print(f"RUF usage tran time distribution: {usage_tran_time_distribution}")
     print(f"RUF usage repair time distribution: {usage_repair_time_distribution}")
     print(f"RUF usage revoke time distribution: {usage_revoke_time_distribution}")
     print(f"RUF usage remove time distribution: {usage_remove_time_distribution}")
+    summary = dict()
+    summary['usage_count'] = usage_count
+    summary['usage_repair_count'] = usage_repair_count
+    summary['usage_revoke_count'] = usage_revoke_count
+    summary['usage_remove_count'] = usage_remove_count
+    summary['usage_not_repair_count'] = usage_not_repair_count
+    summary['usage_not_revoke_count'] = usage_not_revoke_count
+    summary['usage_not_remove_count'] = usage_not_remove_count
+    summary['usage_tran_time'] = usage_tran_time.days
+    summary['usage_inspect_window_time'] = usage_inspect_window_time.days
+    summary['usage_repair_time'] = usage_repair_time.days
+    summary['usage_revoke_time'] = usage_revoke_time.days
+    summary['usage_remove_time'] = usage_remove_time.days
+    summary['usage_tran_time_distribution'] = usage_tran_time_distribution
+    summary['usage_repair_time_distribution'] = usage_repair_time_distribution
+    summary['usage_revoke_time_distribution'] = usage_revoke_time_distribution
+    summary['usage_remove_time_distribution'] = usage_remove_time_distribution
+    summary['usage_tran_repair_distribution'] = usage_tran_repair_distribution
+    summary['usage_tran_revoke_distribution'] = usage_tran_revoke_distribution
+    summary['usage_tran_remove_distribution'] = usage_tran_remove_distribution
+
+    with open(dump_file, 'w') as f:
+        json.dump(summary, f, indent=4)
             # Commonly seen in crates older than first stable compiler. This is OK. We do not analyze them (before first stable Rust).
             # if is_all_not_used:
             #     print(f"!!!!!WARNING!!!!! RUF {ruf} in crate {crate_id} is not used throughout the window.")
@@ -356,6 +431,136 @@ def ruf_change_analysis():
             #         if ruf in rufs:
             #             print(version, end=' ')
             #     print()
-                
 
-ruf_usage_lifetime()
+
+
+def process_results(dump_file):
+    '''
+    Process results dumped by `ruf_change_analysis()`.
+    RUF Usage Crate Count: `SELECT COUNT(DISTINCT crate_id) FROM version_feature_ori INNER JOIN versions ON version_feature_ori.id = versions.id WHERE feature IS NOT NULL`
+    '''
+    with open(dump_file, 'r') as f:
+        summary = json.load(f)
+    usage_count = summary['usage_count']
+    usage_repair_count = summary['usage_repair_count']
+    usage_revoke_count = summary['usage_revoke_count']
+    usage_remove_count = summary['usage_remove_count']
+    usage_not_repair_count = summary['usage_not_repair_count']
+    usage_not_revoke_count = summary['usage_not_revoke_count']
+    usage_not_remove_count = summary['usage_not_remove_count']
+    usage_tran_time = summary['usage_tran_time']
+    usage_inspect_window_time = summary['usage_inspect_window_time']
+    usage_repair_time = summary['usage_repair_time']
+    usage_revoke_time = summary['usage_revoke_time']
+    usage_remove_time = summary['usage_remove_time']
+    usage_tran_time_distribution = summary['usage_tran_time_distribution']
+    usage_repair_time_distribution = summary['usage_repair_time_distribution']
+    usage_revoke_time_distribution = summary['usage_revoke_time_distribution']
+    usage_remove_time_distribution = summary['usage_remove_time_distribution']
+    usage_tran_repair_distribution = summary['usage_tran_repair_distribution']
+    usage_tran_revoke_distribution = summary['usage_tran_revoke_distribution']
+    usage_tran_remove_distribution = summary['usage_tran_remove_distribution']
+    print(f"RUF usage count: {usage_count}")
+    print(f"RUF usage repair count: {usage_repair_count}")
+    print(f"RUF usage revoke count: {usage_revoke_count}")
+    print(f"RUF usage remove count: {usage_remove_count}")
+    print(f"RUF usage not repair count: {usage_not_repair_count}")
+    print(f"RUF usage not revoke count: {usage_not_revoke_count}")
+    print(f"RUF usage not remove count: {usage_not_remove_count}")
+    print(f"RUF usage tran time: {usage_tran_time} days")
+    print(f"RUF usage inspect window time: {usage_inspect_window_time} days")
+    print(f"RUF usage repair time: {usage_repair_time} days")
+    print(f"RUF usage revoke time: {usage_revoke_time} days")
+    print(f"RUF usage remove time: {usage_remove_time} days")
+    print(f"RUF usage tran average time: {usage_tran_time / usage_count} days")
+    print(f"RUF usage inspect window average time: {usage_inspect_window_time / usage_count} days")
+    print(f"RUF usage repair average time: {usage_repair_time / usage_repair_count} days")
+    print(f"RUF usage revoke average time: {usage_revoke_time / usage_revoke_count} days")
+    print(f"RUF usage remove average time: {usage_remove_time / usage_remove_count} days")
+    print(f"RUF usage tran time distribution: {usage_tran_time_distribution}")
+    print(f"RUF usage repair time distribution: {usage_repair_time_distribution}")
+    print(f"RUF usage revoke time distribution: {usage_revoke_time_distribution}")
+    print(f"RUF usage remove time distribution: {usage_remove_time_distribution}")
+    print(f"RUF usage tran repair distribution: {usage_tran_repair_distribution}")
+    print(f"RUF usage tran revoke distribution: {usage_tran_revoke_distribution}")
+    print(f"RUF usage tran remove distribution: {usage_tran_remove_distribution}")
+    # Accumulative distribution: 
+    # times = [42, 84, 126, 180, 270, 360, 450, 540, 720, 900, 1080, 1440, 1800, 2160, 2520, 2880]
+    times = [90, 180, 270, 360, 450, 540, 720, 900, 1080, 1440, 1800, 2160, 2520, 2880]
+    accu_tran_time_distribution = dict()
+    accu_repair_time_distribution = dict()
+    accu_revoke_time_distribution = dict()
+    accu_remove_time_distribution = dict()
+    for usage_tran_time in usage_tran_time_distribution:
+        count = usage_tran_time_distribution[usage_tran_time]
+        usage_tran_time = int(usage_tran_time)
+        for time in times:
+            if usage_tran_time <= time:
+                accu_tran_time_distribution[time] = accu_tran_time_distribution.get(time, 0) + count
+                break
+    for usage_repair_time in usage_repair_time_distribution:
+        count = usage_repair_time_distribution[usage_repair_time]
+        usage_repair_time = int(usage_repair_time)
+        for time in times:
+            if usage_repair_time <= time:
+                accu_repair_time_distribution[time] = accu_repair_time_distribution.get(time, 0) + count
+                break
+    for usage_revoke_time in usage_revoke_time_distribution:
+        count = usage_revoke_time_distribution[usage_revoke_time]
+        usage_revoke_time = int(usage_revoke_time)
+        for time in times:
+            if usage_revoke_time <= time:
+                accu_revoke_time_distribution[time] = accu_revoke_time_distribution.get(time, 0) + count
+                break
+    for usage_remove_time in usage_remove_time_distribution:
+        count = usage_remove_time_distribution[usage_remove_time]
+        usage_remove_time = int(usage_remove_time)
+        for time in times:
+            if usage_remove_time <= time:
+                accu_remove_time_distribution[time] = accu_remove_time_distribution.get(time, 0) + count
+                break
+    print("Days, Tran, Repair, Revoke, Remove")
+    for time in times:
+        tran = accu_tran_time_distribution.get(time, 0)
+        repair = accu_repair_time_distribution.get(time, 0)
+        revoke = accu_revoke_time_distribution.get(time, 0)
+        remove = accu_remove_time_distribution.get(time, 0)
+        print(f"{time}, {tran}, {repair}, {revoke}, {remove}")
+    # Distribution of transition time and repair/revoke/remove time
+    summary_distribution = dict()
+    for usage_tran_time in usage_tran_time_distribution:
+        if usage_tran_time not in usage_tran_repair_distribution:
+            repair_average_time = 0
+        else:
+            repair_average_time = sum(usage_tran_repair_distribution[usage_tran_time]) / len(usage_tran_repair_distribution[usage_tran_time])
+        if usage_tran_time not in usage_tran_revoke_distribution:
+            revoke_average_time = 0
+        else:
+            revoke_average_time = sum(usage_tran_revoke_distribution[usage_tran_time]) / len(usage_tran_revoke_distribution[usage_tran_time])
+        if usage_tran_time not in usage_tran_remove_distribution:
+            remove_average_time = 0
+        else:
+            remove_average_time = sum(usage_tran_remove_distribution[usage_tran_time]) / len(usage_tran_remove_distribution[usage_tran_time])
+        summary_distribution[int(usage_tran_time)] = [repair_average_time, revoke_average_time, remove_average_time]
+    
+    print("Tran, Repair, Revoke, Remove")
+    for usage_tran_time in sorted(summary_distribution):
+        (repair_average_time, revoke_average_time, remove_average_time) = summary_distribution[usage_tran_time]
+        print(f"{usage_tran_time}, {repair_average_time}, {revoke_average_time}, {remove_average_time}")
+
+
+
+import sys
+
+
+if len(sys.argv) < 2:
+    print('Usage: python3 ruf_usage_analysis.py [ruf_usage_lifetime | results]')
+    exit()
+if sys.argv[1] == 'ruf_usage_lifetime':
+    ruf_usage_lifetime('ruf_change_analysis.json')
+elif sys.argv[1] == 'results':
+    process_results('ruf_change_analysis.json')
+else:
+    print('Invalid command')
+    print('Usage: python3 ruf_usage_analysis.py [ruf_usage_lifetime | results]')
+

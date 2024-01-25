@@ -48,6 +48,12 @@ python3 ruf_usage_hot_rust_projects.py case_study
 ```
 
 
+You can view the summary of our results through the command.
+
+```Shell
+python3 ruf_usage_hot_rust_projects.py results
+```
+
 ### Case Study
 
 We analyze three influential projects that contain Rust code, Android Open Source Project (AOSP), Firefox, Rust for Linux.
