@@ -14,7 +14,7 @@ use crate_downloader::{deal_with_crate, fetch_crate};
 
 
 const CRATESDIR: &str = "./on_process";
-const THREADNUM: usize = 2;
+const THREADNUM: usize = 8;
 const DBNAME: &str = "crates";
 
 #[derive(Debug)]
