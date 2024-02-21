@@ -1,6 +1,12 @@
 from datetime import timedelta
 import json
 
+import matplotlib
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
 from utils import *
 from utils_DB import *
 
@@ -256,6 +262,7 @@ def ruf_change_analysis(dump_file):
     usage_tran_repair_distribution = dict()
     usage_tran_revoke_distribution = dict()
     usage_tran_remove_distribution = dict()
+    records = list() # Store metadata of all valid inspect windows. [<tran_type, tran_time, inspect_window_time, durantion_yes, last_usage>]
     for ruf in ruf_lifetime:
         lifetime = ruf_lifetime[ruf]
         # 1. Find RUF transition point
@@ -323,7 +330,7 @@ def ruf_change_analysis(dump_file):
                 tran_type = transition_points[idx][1]
                 first_stable_time = None
                 last_stable_begin_time = None
-                duration_stable_yes = timedelta(days=0)
+                duration_yes = timedelta(days=0)
                 # if tran_type == 'Removed->Unstable':
                 #     continue
                 if len(inspect_window[idx]) == 0:
@@ -340,47 +347,48 @@ def ruf_change_analysis(dump_file):
                     if usage == 'Yes' and not last_stable_begin_time:
                         last_stable_begin_time = max(start_date, version_date)
                     if last_stable_begin_time and usage == 'No':
-                        duration_stable_yes += version_date - last_stable_begin_time
+                        duration_yes += version_date - last_stable_begin_time
                         last_stable_begin_time = None
                     print(usage, end=' ')
                 print()
                 if last_stable_begin_time:
-                    duration_stable_yes += end_date - last_stable_begin_time
+                    duration_yes += end_date - last_stable_begin_time
                 # No usage throughout between transition points, skip.
-                if duration_stable_yes == timedelta(days=0):
+                if duration_yes == timedelta(days=0):
                     print(f'No usage throughout between transition points, skip.')
                     continue
                 usage_count += 1
                 last_usage = inspect_window[idx][-1][1]
                 usage_tran_time += end_date - start_date
                 usage_inspect_window_time += end_date - first_stable_time
+                records.append([tran_type, tran_duration.days, (end_date - first_stable_time).days, duration_yes.days, last_usage])
                 usage_tran_time_distribution[tran_duration.days] = usage_tran_time_distribution.get(tran_duration.days, 0) + 1
-                if '->Stable' in tran_type and duration_stable_yes > timedelta(days=0):
-                    print(f"Duration Stable Yes: {duration_stable_yes}, final usage {last_usage}")
+                if '->Stable' in tran_type and duration_yes > timedelta(days=0):
+                    print(f"Duration Stable Yes: {duration_yes}, final usage {last_usage}")
                     usage_repair_count += 1
-                    usage_repair_time += duration_stable_yes
-                    usage_repair_time_distribution[duration_stable_yes.days] = usage_repair_time_distribution.get(duration_stable_yes.days, 0) + 1
+                    usage_repair_time += duration_yes
+                    usage_repair_time_distribution[duration_yes.days] = usage_repair_time_distribution.get(duration_yes.days, 0) + 1
                     usage_tran_repair_distribution[tran_duration.days] = usage_tran_repair_distribution.get(tran_duration.days, [])
-                    usage_tran_repair_distribution[tran_duration.days].append(duration_stable_yes.days)
-                    if last_usage == 'No':
+                    usage_tran_repair_distribution[tran_duration.days].append(duration_yes.days)
+                    if last_usage == 'Yes':
                         usage_not_repair_count += 1
-                if '->Removed' in tran_type and duration_stable_yes > timedelta(days=0):
-                    print(f"Duration Removed Yes: {duration_stable_yes}, final usage {last_usage}")
+                if '->Removed' in tran_type and duration_yes > timedelta(days=0):
+                    print(f"Duration Removed Yes: {duration_yes}, final usage {last_usage}")
                     usage_revoke_count += 1
-                    usage_revoke_time += duration_stable_yes
-                    usage_revoke_time_distribution[duration_stable_yes.days] = usage_revoke_time_distribution.get(duration_stable_yes.days, 0) + 1
+                    usage_revoke_time += duration_yes
+                    usage_revoke_time_distribution[duration_yes.days] = usage_revoke_time_distribution.get(duration_yes.days, 0) + 1
                     usage_tran_revoke_distribution[tran_duration.days] = usage_tran_revoke_distribution.get(tran_duration.days, [])
-                    usage_tran_revoke_distribution[tran_duration.days].append(duration_stable_yes.days)
-                    if last_usage == 'No':
+                    usage_tran_revoke_distribution[tran_duration.days].append(duration_yes.days)
+                    if last_usage == 'Yes':
                         usage_not_revoke_count += 1
-                if '->Unstable' in tran_type and duration_stable_yes > timedelta(days=0):
-                    print(f"Duration Unstable Yes: {duration_stable_yes}, final usage {last_usage}")
+                if '->Unstable' in tran_type and duration_yes > timedelta(days=0):
+                    print(f"Duration Unstable Yes: {duration_yes}, final usage {last_usage}")
                     usage_remove_count += 1
-                    usage_remove_time += duration_stable_yes
-                    usage_remove_time_distribution[duration_stable_yes.days] = usage_remove_time_distribution.get(duration_stable_yes.days, 0) + 1
+                    usage_remove_time += duration_yes
+                    usage_remove_time_distribution[duration_yes.days] = usage_remove_time_distribution.get(duration_yes.days, 0) + 1
                     usage_tran_remove_distribution[tran_duration.days] = usage_tran_remove_distribution.get(tran_duration.days, [])
-                    usage_tran_remove_distribution[tran_duration.days].append(duration_stable_yes.days)
-                    if last_usage == 'No':
+                    usage_tran_remove_distribution[tran_duration.days].append(duration_yes.days)
+                    if last_usage == 'Yes':
                         usage_not_remove_count += 1
     print(f"RUF usage count: {usage_count}")
     print(f"RUF usage repair count: {usage_repair_count}")
@@ -418,6 +426,7 @@ def ruf_change_analysis(dump_file):
     summary['usage_tran_repair_distribution'] = usage_tran_repair_distribution
     summary['usage_tran_revoke_distribution'] = usage_tran_revoke_distribution
     summary['usage_tran_remove_distribution'] = usage_tran_remove_distribution
+    summary['records'] = records
 
     with open(dump_file, 'w') as f:
         json.dump(summary, f, indent=4)
@@ -460,6 +469,7 @@ def process_results(dump_file):
     usage_tran_repair_distribution = summary['usage_tran_repair_distribution']
     usage_tran_revoke_distribution = summary['usage_tran_revoke_distribution']
     usage_tran_remove_distribution = summary['usage_tran_remove_distribution']
+    records = summary['records']
     print(f"RUF usage count: {usage_count}")
     print(f"RUF usage repair count: {usage_repair_count}")
     print(f"RUF usage revoke count: {usage_revoke_count}")
@@ -526,7 +536,7 @@ def process_results(dump_file):
         revoke = accu_revoke_time_distribution.get(time, 0)
         remove = accu_remove_time_distribution.get(time, 0)
         print(f"{time}, {tran}, {repair}, {revoke}, {remove}")
-    # Distribution of transition time and repair/revoke/remove time
+    # Distribution of transition and repair/revoke/remove time
     summary_distribution = dict()
     for usage_tran_time in usage_tran_time_distribution:
         if usage_tran_time not in usage_tran_repair_distribution:
