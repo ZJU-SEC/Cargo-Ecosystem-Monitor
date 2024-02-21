@@ -557,6 +557,250 @@ def process_results(dump_file):
     for usage_tran_time in sorted(summary_distribution):
         (repair_average_time, revoke_average_time, remove_average_time) = summary_distribution[usage_tran_time]
         print(f"{usage_tran_time}, {repair_average_time}, {revoke_average_time}, {remove_average_time}")
+    # Distribution of inspect window and repair/revoke/remove time
+    print("Inspect Window, Repair, Revoke, Remove")
+    processed_records = list()
+    for record in records:
+        tran_type = record[0]
+        tran_time = record[1]
+        inspect_window_time = record[2]
+        duration_yes = record[3]
+        last_usage = record[4]
+        # if duration_yes + 1 >= inspect_window_time:
+        #     last_usage = 1
+        # else:
+        #     last_usage = 0
+        if last_usage == 'Yes':
+            last_usage = 1
+        else:
+            last_usage = 0
+        if last_usage == 'Yes': # Given more time, fix delay can be longer. We only consider fixed cases.
+            continue
+        type = None
+        if '->Stable' in tran_type:
+            type = 'Stable'
+        if '->Removed' in tran_type:
+            type = 'Removed'
+        if '->Unstable' in tran_type:
+            type = 'Unstable'
+        another_record = [type, inspect_window_time, duration_yes, last_usage]
+        processed_records.append(another_record)
+        # print(f"{inspect_window_time}, {duration_yes}, {type}")
+    make_graph(processed_records)
+
+
+def make_graph(records):
+
+    sns.set_style("whitegrid")
+
+    # pal = dict(male="#6495ED", female="#F08080")
+    # g = sns.lmplot(x="age", y="survived", col="sex", hue="sex", data=df,
+    #             palette=pal, y_jitter=.02, logistic=True, truncate=False)
+    
+    column = ['ruf_type',  'inspect_window_time', 'duration_yes', 'last_usage']
+    df = pd.DataFrame(data = records, columns=column)
+    print(df)
+    pal = {'Unstable':"#6495ED", 'Removed':"#F08080", 'Stable':'#80d819'}
+
+    # Figure 1: Window <-> Last Usage
+    # plt.figure().clear()
+    # g = sns.lmplot(x="inspect_window_time", y="last_usage", col="ruf_type", hue="ruf_type", data=df,
+    #             palette=pal, y_jitter=.02, logistic=True , truncate=False)
+    # g.set(xlim=(0, 3000), ylim=(-.05, 1.05))
+    # matplotlib.pyplot.savefig('figure1.pdf', dpi=400, format='pdf')
+
+    # # Figure 2: Window <-> Duration Yes
+    # plt.figure().clear()
+    # g = sns.lmplot(
+    #     data=df,
+    #     x="inspect_window_time", y="duration_yes", hue="ruf_type", palette=pal,
+    #     height=5
+    # )
+    # matplotlib.pyplot.savefig('figure2.pdf', dpi=400, format='pdf')
+
+    # Figure 3: Window <-> Duration Yes (6wks, last usage True)
+    # plt.figure().clear()
+    # records_window_6wks_records = list()
+    # for record in records:
+    #     ruf_type = record[0]
+    #     inspect_window_time = int(record[1]/42)
+    #     duration_yes = record[2]
+    #     last_usage = record[3]
+    #     if last_usage == 1:
+    #         records_window_6wks_records.append([ruf_type, inspect_window_time, duration_yes, last_usage])
+    # df = pd.DataFrame(data = records_window_6wks_records, columns=column)
+    # g = sns.lmplot(
+    #     data=df,
+    #     x="inspect_window_time", y="duration_yes", col="ruf_type", hue="ruf_type", palette=pal,
+    #     height=5
+    # )
+    # matplotlib.pyplot.savefig('figure3.pdf', dpi=400, format='pdf')
+
+    # Figure 4: Window <-> Duration Yes (last usage False)
+    # plt.figure().clear()
+    # records_window_6wks_records = list()
+    # for record in records:
+    #     ruf_type = record[0]
+    #     inspect_window_time = record[1]/365
+    #     duration_yes = record[2]/365
+    #     last_usage = record[3]
+    #     if last_usage == 0:
+    #         records_window_6wks_records.append([ruf_type, inspect_window_time, duration_yes, last_usage])
+    # df = pd.DataFrame(data = records_window_6wks_records, columns=column)
+    # print(df)
+    # g = sns.lmplot(
+    #     data=df,
+    #     x="inspect_window_time", y="duration_yes", col="ruf_type", hue="ruf_type", palette=pal,lowess=True,
+    #     scatter_kws={"color": "#BFBFBF", "s": 10}, line_kws={"linewidth": 3},height=6, aspect=0.7
+    # )
+    # g.set(xlim=(0, 8), ylim=(0, 5))
+    # plt.axhline(y=0.2)
+    # matplotlib.pyplot.savefig('figure4.pdf', dpi=400, format='pdf')
+
+
+    # Figure 5: Window <-> Average Duration Yes (6wks, last usage False)
+    plt.figure().clear()
+    column = ['ruf_type',  'inspect_window_time', 'duration_yes']
+    graph_data = list()
+    graph_data.extend(process_average_window(records, 'Stable'))
+    graph_data.extend(process_average_window(records, 'Unstable'))
+    graph_data.extend(process_average_window(records, 'Removed'))
+    df = pd.DataFrame(data = graph_data, columns=column)
+    g = sns.lmplot(
+        data=df,
+        x="inspect_window_time", y="duration_yes", col="ruf_type", hue="ruf_type", palette=pal, lowess=True,
+        height=5
+    )
+    matplotlib.pyplot.savefig('figure5.png', dpi=400, format='png')
+
+
+    # Figure 6: Window <-> Average Duration Yes (6wks, last usage False) log regression
+    # plt.figure().clear()
+    # column = ['ruf_type',  'inspect_window_time', 'duration_yes', 'last_usage']
+    # records_window_6wks_records = list()
+    # for record in records:
+    #     ruf_type = record[0]
+    #     inspect_window_time = int(record[1]/84) + 1
+    #     duration_yes = record[2]
+    #     last_usage = record[3]
+    #     if last_usage == 0:
+    #         records_window_6wks_records.append([ruf_type, inspect_window_time, duration_yes, last_usage])
+    # df = pd.DataFrame(data = records_window_6wks_records, columns=column)
+    # g = sns.lmplot(
+    #     data=df,
+    #     x="inspect_window_time", y="duration_yes", col="ruf_type", hue="ruf_type", palette=pal, x_estimator=np.mean, lowess=True, 
+    #     height=5
+    # )
+    # matplotlib.pyplot.savefig('figure6.pdf', dpi=400, format='pdf')
+
+    # Box Plot
+    # Draw a nested boxplot to show bills by day and time
+    plt.figure().clear()
+    column = ['ruf_type',  'inspect_window_time', 'duration_yes', 'last_usage']
+    average_dots = list()
+    for record in records:
+        ruf_type = record[0]
+        inspect_window_time = int(record[1]/84)
+        duration_yes = record[2]
+        last_usage = record[3]
+        if ruf_type != 'Stable':
+            continue
+        if last_usage == 0:
+            average_dots.append([ruf_type, inspect_window_time, duration_yes, last_usage])
+    df = pd.DataFrame(data = average_dots, columns=column)
+    sns.boxplot(x="inspect_window_time", y="duration_yes",
+                color="#6495ED", flierprops={'markerfacecolor': '#00000000', 'markeredgecolor': '#00000000'},boxprops=dict(edgecolor='#6495ED'),
+                data=df)
+    matplotlib.pyplot.savefig('Box.png', dpi=400, format='png')
+    sns.despine(offset=10, trim=True)
+
+
+    # Final figure
+    plt.figure().clear()
+    ruf_types = ['Stable', 'Unstable', 'Removed']
+    figure, axes = plt.subplots(nrows=2, ncols=3, figsize=(12, 10), height_ratios=[1, 1.8], sharey='row', sharex='col')
+    for idx in range(len(ruf_types)):
+        ruf_type = ruf_types[idx]
+        color = pal[ruf_type]
+        # Top figure: Window <-> Last Usage
+        column = ['ruf_type',  'inspect_window_time', 'duration_yes', 'last_usage']
+        df = pd.DataFrame(data = records, columns=column)
+        df = df[df['ruf_type'] == ruf_type]
+        g = sns.regplot(x="inspect_window_time", y="last_usage", data=df,
+                scatter_kws={"color": "#BFBFBF", "s": 3}, y_jitter=.03, logistic=True, ax= axes[0, idx], color=color)
+        # Layer 1: Dots
+        dots = process_wk_window(records, ruf_type)
+        column = ['ruf_type',  'inspect_window_time', 'duration_yes']
+        df = pd.DataFrame(data = dots, columns=column)
+        g = sns.scatterplot(
+            data=df,
+            x="inspect_window_time", y="duration_yes", 
+            color='#BFBFBF', size = 10, ax = axes[1, idx], legend= False
+        )
+        # Layer 2: Lowess Regression of Average Duration Yes
+        graph_data = process_average_window(records, ruf_type)
+        df = pd.DataFrame(data = graph_data, columns=column)
+        g = sns.regplot(
+            data=df,
+            x="inspect_window_time", y="duration_yes", lowess=True, marker='D', color=color,
+            scatter_kws={"s": 35}, line_kws={"linewidth": 3}, ax = axes[1, idx]
+        )
+        g.set(xlim=(0, 2800), ylim=(0, 1000))
+    for ax, title in zip(axes[0], ruf_types):
+        ax.set_title(title + ' RUF')
+        ax.set(xlabel='', ylabel='')
+    for ax, title in zip(axes[1], ruf_types):
+        ax.set(xlabel='Fix Window / days', ylabel='')
+    axes[0, 0].set(ylabel='Final Usage')
+    axes[1, 0].set(ylabel='Fix Time / days')
+    # plt.tight_layout()
+    plt.subplots_adjust(wspace=0.07, hspace=0.07)
+    matplotlib.pyplot.savefig('ruf_repair_yes.png', dpi=400, format='png')
+    matplotlib.pyplot.savefig('ruf_repair_yes.pdf', dpi=400, format='pdf')
+
+
+
+
+def process_average_window(records, ruf_type):
+    ''' Internal Use'''
+    records_window_6wks_records = [(0,0)] * int(3000/42)
+    for record in records:
+        record_ruf_type = record[0]
+        if record_ruf_type != ruf_type:
+            continue
+        inspect_window_time = int(record[1]/42)
+        duration_yes = record[2]
+        last_usage = record[3]
+        count = records_window_6wks_records[inspect_window_time][0]
+        total = records_window_6wks_records[inspect_window_time][1]
+        if last_usage == 0:
+            records_window_6wks_records[inspect_window_time] = (count+1, total+duration_yes)
+    average_result = list()
+    last_average = 0
+    for idx in range(len(records_window_6wks_records)):
+        (count, total) = records_window_6wks_records[idx]
+        if count != 0:
+            average = int(total / count)
+            average_result.append([ruf_type, idx*42, average])
+        else :
+            average = last_usage
+        last_usage = average
+    return average_result
+
+
+def process_wk_window(records, ruf_type):
+    ''' Internal Use'''
+    records_window_6wks_records = list()
+    for record in records:
+        record_ruf_type = record[0]
+        if record_ruf_type != ruf_type:
+            continue
+        inspect_window_time = int(record[1]/42)*42
+        duration_yes = record[2]
+        last_usage = record[3]
+        if last_usage == 0:
+            records_window_6wks_records.append([ruf_type, inspect_window_time, duration_yes])
+    return records_window_6wks_records
 
 
 
