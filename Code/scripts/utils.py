@@ -4,8 +4,14 @@ from datetime import datetime
 
 def get_version_date() -> dict:
     versions_date = dict()
-    r = requests.get('https://raw.githubusercontent.com/rust-lang/rust/master/RELEASES.md')
-    text = r.text
+    try:
+        with open('RUST_RELEASES.md', 'r') as f:
+            text = f.read()
+    except:
+        r = requests.get('https://raw.githubusercontent.com/rust-lang/rust/master/RELEASES.md')
+        text = r.text
+        with open('RUST_RELEASES.md', 'w') as f:
+            f.write(text)
     versions = re.findall("Version 1\.[0-9]+\.0 \([0-9]+-[0-9]+-[0-9]+\)", text)
     
     # `version` example: "Version 0.1  (2012-01-20)"
@@ -26,6 +32,7 @@ def version_to_date(minor_version: int):
     '''
     Convert version to date
     '''
+    # VERSION_DATE = get_version_date()
     version = '1.' + str(minor_version) + '.0'
     if version in VERSION_DATE:
         return VERSION_DATE[version]
