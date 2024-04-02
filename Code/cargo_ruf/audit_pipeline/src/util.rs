@@ -13,11 +13,14 @@ use regex::Regex;
 // It is empty by default. If it is not, it is not used for general purposes.
 const DB_SUFFIX: &str = "";
 const RUF_AUDIT: &str = "../ruf_audit/target/debug/ruf_audit";
+const CARGO_USAGE: &str = "../cargo_usage";
 const ON_PROCESS: &str = "../../crate_downloader/on_process/";
 const THREAD_DATA_SIZE: u32 = 20;
 
 lazy_static! {
     static ref COLOR_CODES: Regex = Regex::new("\x1b\\[[^m]*m").unwrap();
+    static ref TEST_RESULT: Regex =
+        Regex::new(r"===\((true|false),(true|false),(true|false),(true|false)\)===").unwrap();
 }
 
 pub struct VersionInfo {
@@ -59,18 +62,19 @@ pub fn run_audit(workers: usize, status: &str) {
 
         handles.push(thread::spawn(move || {
             let ruf_audit_path = PathBuf::from(RUF_AUDIT).canonicalize().expect("cannot find ruf_audit");
-            let cargo_home = PathBuf::from(format!("./cargo_usage/home{i}")).canonicalize().expect("cannot find cargo home");
+            let ruf_audit_path_str = ruf_audit_path.to_str().unwrap();
+            let cargo_home = PathBuf::from(format!("{CARGO_USAGE}/home{i}")).canonicalize().expect("cannot find cargo home");
 
             while let Ok(versions) = rx.recv() {
                 for v in versions {
                     let v = v as VersionInfo;
-                    let mut audit = Command::new(&ruf_audit_path);
                     let work_dir = PathBuf::from(format!(
                         "{ON_PROCESS}/{name}/{name}-{num}",
                         name = v.name,
                         num = v.num
                     ))
                     .canonicalize();
+
                     let work_dir = match work_dir {
                         Ok(work_dir) => work_dir,
                         Err(e) => {
@@ -82,17 +86,42 @@ pub fn run_audit(workers: usize, status: &str) {
                                 Arc::clone(&conn),
                                 v.version_id,
                                 -1,
+                                (false, false, false, false),
                                 &e.to_string(),
                             );
-                            update_process_status(Arc::clone(&conn), v.version_id, "fail");
+                            update_process_status(Arc::clone(&conn), v.version_id, "error");
                             continue;
                         }
                     };
 
+                    // pre clean
+                    let mut clean = Command::new("sh");
+                    clean.args(["-c", "cargo clean && rm -f Cargo.lock"]);
+                    clean.current_dir(&work_dir);
+                    clean.env("CARGO_HOME", &cargo_home);
+                    if matches!(clean.output().map(|output| output.status.success()), Err(_) | Ok(false)) {
+                        warn!("Thread {i}: pre cleaning up for {version} failed", version = v.version_id);
+                    }
 
+                    "systemd-run --scope -p MemoryMax=100M --user python3 memory_test.py";
+                    let mut audit = Command::new("systemd-run");
+                    audit.args([
+                        "--scope",
+                        "-p",
+                        "MemoryMax=4G",
+                        "--user",
+                        ruf_audit_path_str,
+                        "--test",
+                        "--",
+                        "--all-features",
+                        "--all-targets",
+                    ]);
+
+                    // let mut audit = Command::new(&ruf_audit_path);
+                    // audit.args(["--test", "--", "--all-features", "--all-targets"]);
                     audit.current_dir(&work_dir);
-                    audit.args(["--quick-fix", "--", "--all-features", "--all-targets"]);
                     audit.env("CARGO_HOME", &cargo_home);
+                    audit.env_remove("RUSTUP_TOOLCHAIN");
 
                     info!("Thread {i}: audit version {version} start", version = v.version_id);
 
@@ -107,9 +136,10 @@ pub fn run_audit(workers: usize, status: &str) {
                                 Arc::clone(&conn),
                                 v.version_id,
                                 -1,
+                                (false, false, false, false),
                                 &e.to_string(),
                             );
-                            update_process_status(Arc::clone(&conn), v.version_id, "fail");
+                            update_process_status(Arc::clone(&conn), v.version_id, "error");
                             continue;
                         }
                     };
@@ -119,30 +149,29 @@ pub fn run_audit(workers: usize, status: &str) {
                     let msg = String::from_utf8_lossy(&output.stdout);
                     let msg = COLOR_CODES.replace_all(&msg, "");
 
-                    if output.status.success() {
-                        store_audit_results(
-                            Arc::clone(&conn),
-                            v.version_id,
-                            output.status.code().unwrap_or(0),
-                            &msg,
+                    let exit_code = output.status.code().unwrap_or(-1);
+                    if exit_code == 0 || exit_code == 2 {
+                        let caps = TEST_RESULT.captures(&msg).unwrap();
+                        let results = (
+                            caps.get(1).unwrap().as_str() == "true",
+                            caps.get(2).unwrap().as_str() == "true",
+                            caps.get(3).unwrap().as_str() == "true",
+                            caps.get(4).unwrap().as_str() == "true",
                         );
+
+                        store_audit_results(Arc::clone(&conn), v.version_id, exit_code, results, &msg);
                         update_process_status(Arc::clone(&conn), v.version_id, "done");
                     } else {
-                        store_audit_results(
-                            Arc::clone(&conn),
-                            v.version_id,
-                            output.status.code().unwrap_or(-1),
-                            &msg,
-                        );
+                        store_audit_results(Arc::clone(&conn), v.version_id, exit_code, (false, false, false, false), &msg);
                         update_process_status(Arc::clone(&conn), v.version_id, "fail");
                     }
 
                     // do cleaning
-                    let mut cargo = Command::new("cargo");
-                    cargo.arg("clean");
-                    cargo.current_dir(&work_dir);
-                    if matches!(cargo.output().map(|output| output.status.success()), Err(_) | Ok(false)) {
-                        warn!("Thread {i}: cleaning up for {version} failed", version = v.version_id);
+                    clean.args(["-c", "cargo clean && rm -f Cargo.lock"]);
+                    clean.current_dir(&work_dir);
+                    clean.env("CARGO_HOME", &cargo_home);
+                    if matches!(clean.output().map(|output| output.status.success()), Err(_) | Ok(false)) {
+                        warn!("Thread {i}: pre cleaning up for {version} failed", version = v.version_id);
                     }
                 } // for ends
             } // while ends
@@ -205,12 +234,16 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
                 r#"CREATE TABLE IF NOT EXISTS ruf_audit_results{DB_SUFFIX}(
                     version_id INT PRIMARY KEY,
                     exit_code INT,
+                    Test1 bool,
+                    Test2 bool,
+                    Test3 bool,
+                    Test4 bool,
                     msg VARCHAR
                 )"#
             ),
             &[],
         )
-        .unwrap_or_default();
+        .unwrap();
 
     conn.lock()
         .unwrap()
@@ -243,7 +276,7 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
                 &format!(
                     "
                     INSERT INTO ruf_audit_process_status{DB_SUFFIX} 
-                    SELECT DISTINCT ver, 'undone' FROM tmp_ruf_impact WHERE status = 'removed' or status = 'unknown'"
+                    SELECT DISTINCT id, 'undone' FROM tmp_ruf_impact WHERE status = 'removed' or status = 'unknown'"
                 ),
                 &[],
             )
@@ -258,19 +291,32 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
     }
 }
 
-fn store_audit_results(conn: Arc<Mutex<Client>>, version_id: i32, exit_code: i32, msg: &str) {
+fn store_audit_results(
+    conn: Arc<Mutex<Client>>,
+    version_id: i32,
+    exit_code: i32,
+    results: (bool, bool, bool, bool),
+    msg: &str,
+) {
     conn.lock()
         .unwrap()
         .query(
             &format!(
-                r#"INSERT INTO ruf_audit_results{DB_SUFFIX} (version_id, exit_code, msg)
-                VALUES ($1, $2, $3)
+                r#"INSERT INTO ruf_audit_results{DB_SUFFIX} (version_id, exit_code, Test1, Test2, Test3, Test4, msg)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (version_id)
-                DO UPDATE SET exit_code = EXCLUDED.exit_code, msg = EXCLUDED.msg"#
+                DO UPDATE SET exit_code = EXCLUDED.exit_code, Test1 = EXCLUDED.Test1, Test2 = EXCLUDED.Test2, Test3 = EXCLUDED.Test3, Test4 = EXCLUDED.Test4, msg = EXCLUDED.msg"#
             ),
-            &[&version_id, &exit_code, &msg],
-        )
-        .expect("cannot store audit results");
+            &[
+                &version_id,
+                &exit_code,
+                &results.0,
+                &results.1,
+                &results.2,
+                &results.3,
+                &msg,
+            ],
+        ).expect("cannot store audit results");
 }
 
 fn update_process_status(conn: Arc<Mutex<Client>>, version_id: i32, status: &str) {
