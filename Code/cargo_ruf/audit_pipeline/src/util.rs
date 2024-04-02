@@ -103,7 +103,6 @@ pub fn run_audit(workers: usize, status: &str) {
                         warn!("Thread {i}: pre cleaning up for {version} failed", version = v.version_id);
                     }
 
-                    "systemd-run --scope -p MemoryMax=100M --user python3 memory_test.py";
                     let mut audit = Command::new("systemd-run");
                     audit.args([
                         "--scope",
@@ -149,7 +148,7 @@ pub fn run_audit(workers: usize, status: &str) {
                     let msg = String::from_utf8_lossy(&output.stdout);
                     let msg = COLOR_CODES.replace_all(&msg, "");
 
-                    let exit_code = output.status.code().unwrap_or(-1);
+                    let exit_code = output.status.code().unwrap_or(3);
                     if exit_code == 0 || exit_code == 2 {
                         let caps = TEST_RESULT.captures(&msg).unwrap();
                         let results = (
@@ -162,6 +161,7 @@ pub fn run_audit(workers: usize, status: &str) {
                         store_audit_results(Arc::clone(&conn), v.version_id, exit_code, results, &msg);
                         update_process_status(Arc::clone(&conn), v.version_id, "done");
                     } else {
+                        // normally the exit code should be 1 if failed
                         store_audit_results(Arc::clone(&conn), v.version_id, exit_code, (false, false, false, false), &msg);
                         update_process_status(Arc::clone(&conn), v.version_id, "fail");
                     }
