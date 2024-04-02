@@ -18,14 +18,6 @@ Before the evaluation, we have to do some preparings:
     )
     ```
     After 'on_process' ready, remember to add a rust-toolchain file, specifying 'nightly-2022-05-19'.
-- cargo_usage: for multithreading, please `mkdir` before runing:
-    ```sh
-        cargo_usage
-        ├── home0
-        ├── home1
-        ├── home2
-        └── home3
-    ```
 - ruf_audit: please make sure the `ruf_audit` is ready to use, and the `ruf_audit` is in the same directory with `audit_pipeline`.
 
 And now you can run the pipeline simply with `cargo run`.

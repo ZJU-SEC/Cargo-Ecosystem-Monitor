@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -63,7 +64,11 @@ pub fn run_audit(workers: usize, status: &str) {
         handles.push(thread::spawn(move || {
             let ruf_audit_path = PathBuf::from(RUF_AUDIT).canonicalize().expect("cannot find ruf_audit");
             let ruf_audit_path_str = ruf_audit_path.to_str().unwrap();
-            let cargo_home = PathBuf::from(format!("{CARGO_USAGE}/home{i}")).canonicalize().expect("cannot find cargo home");
+            let cargo_home = PathBuf::from(format!("{CARGO_USAGE}/home{i}"));
+            if !cargo_home.exists() {
+                fs::create_dir_all(&cargo_home).expect("cannot create cargo home directory");
+            }
+            let cargo_home = cargo_home.canonicalize().expect("cannot find cargo home path");
 
             while let Ok(versions) = rx.recv() {
                 for v in versions {
