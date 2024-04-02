@@ -14,7 +14,7 @@ Before the evaluation, we have to do some preparings:
     INSERT INTO download_status
     SELECT crate_id, id, name, num, 'undownloaded' FROM versions_with_name
     WHERE id in (
-    SELECT DISTINCT(id) FROM tmp_ruf_impact WHERE status != 'accepted' and status != 'active' 
+    SELECT DISTINCT(id) FROM tmp_ruf_impact WHERE status = 'removed' or status = 'unknown' 
     )
     ```
     After 'on_process' ready, remember to add a rust-toolchain file, specifying 'nightly-2022-05-19'.
