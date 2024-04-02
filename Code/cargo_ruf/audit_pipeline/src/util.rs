@@ -89,7 +89,7 @@ pub fn run_audit(workers: usize, status: &str) {
                                 (false, false, false, false),
                                 &e.to_string(),
                             );
-                            update_process_status(Arc::clone(&conn), v.version_id, "error");
+                            update_process_status(Arc::clone(&conn), v.version_id, "error1");
                             continue;
                         }
                     };
@@ -139,7 +139,7 @@ pub fn run_audit(workers: usize, status: &str) {
                                 (false, false, false, false),
                                 &e.to_string(),
                             );
-                            update_process_status(Arc::clone(&conn), v.version_id, "error");
+                            update_process_status(Arc::clone(&conn), v.version_id, "error2");
                             continue;
                         }
                     };
