@@ -1,15 +1,16 @@
 # Ruf Audit
 
-This part it the mitigation tools and its evaluations, including two crates:
-- `ruf_audit` is the mitigation tools, more details can be found at its readme file.
-- `audit_pipeline` is the pipeline we used to evaluation our tools. This pipeline will run `ruf_audit` in all crates with ruf issues, as detected before.
+This project aims at providing RUF audit tools to mitigate RUF impacts, including two crates:
+- `ruf_audit`:Main mitigation tools. More details can be found at its readme file.
+- `audit_pipeline` Evaluation of our tools. This pipeline will run `ruf_audit` in all crates with ruf issues, as detected before.
 
 
 ## Usage
 
-Before the evaluation, we have to do some preparings:
-- database: we need all result data ready in postgres (file alltables_20220811.sql).
-- crates: we need all crate sources with ruf issues at 'crates_donwloader/on_process'. To get all impacted crates, you should first build `tmp_ruf_impact` table,  and then select all crates using non-compilable rufs. The `donwload_status` table can be updated as:
+Preparations ahead of running:
+
+- database: we need all result data ready in postgreSQL, as described in the root readme file. (file alltables_20220811.sql). We use impacted package versions as our database. The impacted packages are determined by the `Total Impact` script in `Cargo-Ecosystem-Monitor/Code/scripts/research_results.sql`.
+- crates source code: we need all crate sources with ruf issues at `Cargo-Ecosystem-Monitor/crates_donwloader/on_process`. To specify the crates we want to download, you can execute the script below to insert items we want to download. But when you have run our crate downloader, things may be more complicated.
     ```sql
     INSERT INTO download_status
     SELECT crate_id, id, name, num, 'undownloaded' FROM versions_with_name
