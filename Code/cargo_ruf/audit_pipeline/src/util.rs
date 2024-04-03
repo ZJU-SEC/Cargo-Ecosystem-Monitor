@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -63,7 +64,11 @@ pub fn run_audit(workers: usize, status: &str) {
         handles.push(thread::spawn(move || {
             let ruf_audit_path = PathBuf::from(RUF_AUDIT).canonicalize().expect("cannot find ruf_audit");
             let ruf_audit_path_str = ruf_audit_path.to_str().unwrap();
-            let cargo_home = PathBuf::from(format!("{CARGO_USAGE}/home{i}")).canonicalize().expect("cannot find cargo home");
+            let cargo_home = PathBuf::from(format!("{CARGO_USAGE}/home{i}"));
+            if !cargo_home.exists() {
+                fs::create_dir_all(&cargo_home).expect("cannot create cargo home directory");
+            }
+            let cargo_home = cargo_home.canonicalize().expect("cannot find cargo home path");
 
             while let Ok(versions) = rx.recv() {
                 for v in versions {
@@ -103,7 +108,6 @@ pub fn run_audit(workers: usize, status: &str) {
                         warn!("Thread {i}: pre cleaning up for {version} failed", version = v.version_id);
                     }
 
-                    "systemd-run --scope -p MemoryMax=100M --user python3 memory_test.py";
                     let mut audit = Command::new("systemd-run");
                     audit.args([
                         "--scope",
@@ -149,7 +153,7 @@ pub fn run_audit(workers: usize, status: &str) {
                     let msg = String::from_utf8_lossy(&output.stdout);
                     let msg = COLOR_CODES.replace_all(&msg, "");
 
-                    let exit_code = output.status.code().unwrap_or(-1);
+                    let exit_code = output.status.code().unwrap_or(3);
                     if exit_code == 0 || exit_code == 2 {
                         let caps = TEST_RESULT.captures(&msg).unwrap();
                         let results = (
@@ -162,6 +166,7 @@ pub fn run_audit(workers: usize, status: &str) {
                         store_audit_results(Arc::clone(&conn), v.version_id, exit_code, results, &msg);
                         update_process_status(Arc::clone(&conn), v.version_id, "done");
                     } else {
+                        // normally the exit code should be 1 if failed
                         store_audit_results(Arc::clone(&conn), v.version_id, exit_code, (false, false, false, false), &msg);
                         update_process_status(Arc::clone(&conn), v.version_id, "fail");
                     }
