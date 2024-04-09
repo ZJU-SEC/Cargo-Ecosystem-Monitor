@@ -4,8 +4,11 @@ extern crate simplelog;
 use simplelog::*;
 use std::fs::OpenOptions;
 
-mod util;
-use util::run_audit;
+// mod util;
+// use util::run_audit;
+
+mod util_sampling;
+use util_sampling::run_audit;
 
 fn main() {
     CombinedLogger::init(vec![
@@ -29,5 +32,5 @@ fn main() {
     ])
     .unwrap();
 
-    run_audit(4, "undone");
+    run_audit(2, "undone");
 }
