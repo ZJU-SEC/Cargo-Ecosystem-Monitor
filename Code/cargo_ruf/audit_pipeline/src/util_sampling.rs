@@ -280,10 +280,10 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
                 &format!(
                     "
                     INSERT INTO ruf_audit_process_status{DB_SUFFIX} 
-                    SELECT id, 'undone' FROM (
-                        SELECT *, ROW_NUMBER() OVER (ORDER BY id) AS rn
+                    SELECT ver, 'undone' FROM (
+                        SELECT *, ROW_NUMBER() OVER (ORDER BY ver) AS rn
                         FROM (
-                            SELECT DISTINCT id
+                            SELECT DISTINCT ver
                             FROM tmp_ruf_impact
                             WHERE status = 'removed' OR status = 'unknown'
                         ) AS tmp

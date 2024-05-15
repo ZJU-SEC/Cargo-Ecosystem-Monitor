@@ -281,7 +281,7 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
                 &format!(
                     "
                     INSERT INTO ruf_audit_process_status{DB_SUFFIX} 
-                    SELECT DISTINCT id, 'undone' FROM tmp_ruf_impact WHERE status = 'removed' or status = 'unknown'"
+                    SELECT DISTINCT ver, 'undone' FROM tmp_ruf_impact WHERE status = 'removed' or status = 'unknown'"
                 ),
                 &[],
             )
