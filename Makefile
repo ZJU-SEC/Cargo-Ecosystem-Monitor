@@ -19,6 +19,11 @@ cratesio:
 	curl https://static.crates.io/db-dump.tar.gz --output ./data/crates.db-dump.tar.gz
 	cd data && tar -xf crates.db-dump.tar.gz 
 
+
+extract_cratesio_20220811:
+	cd data && tar -xf ./Release-20220811/Metadata/db-dump_20220811.tar.gz
+
+
 extract_cratesio_once:
 	cd data && tar -xf crates.db-dump.tar.gz 
 
@@ -36,6 +41,15 @@ sencond		:= $(shell expr substr "$(timeofday)" 5 2)
 dropdatabaseALL:
 	echo BE AWARE THAT ALL DATA IN THE DATABASE WILL BE LOST!!!
 	echo DROP DATABASE IF EXISTS crates | psql -U postgres 
+
+download_20220811_rawdata:
+	curl https://zenodo.org/records/8289280/files/Release-20220811.zip\?download\=1 --output ./data/Release-20220811.zip
+	cd data && unzip Release-20220811.zip
+
+import_20220811_rawdata:
+	createdb -U postgres crates
+	psql -U postgres crates < ./data/Release-20220811/EcosystemRawData/alltables_20220811.sql
+
 
 import_rawdata:
 	createdb -U postgres crates

@@ -1,11 +1,11 @@
 # Code
 
-This directory contains multiple sub-projects for various analysis of the Rust ecosystem. All work should be done after the env build (Step 0) following the root directory guide.
+This directory contains multiple sub-projects for various analyses of the Rust ecosystem. All work should be done after the env build (Step 0) following the root directory guide.
 
 
 ![Tool Structure](Arch.png)
 
-The figure shows main tool structure of this project. 
+The figure shows the main tool structure of this project. 
 
 - `accuracy_evaluation`: Evaluate the accuracy of our dependency resolution tool. Should be done after project `rust_deps`.
 - `advisory_scanner`: Scan the advisory impact range across the Rust ecosystem according to provided advisory data in json file. Should be done after project `rust_deps`. This tool is not included in RUF study, but is extended for vulnerability study in the Rust ecosystem, and can reuse the existing architecture to achieve the goal.
@@ -22,6 +22,14 @@ The figure shows main tool structure of this project.
 - `scripts`: SQL scripts to prebuild databases and analyze the Crates database. After building all necessary databases, you can use SQL scripts here to generate "research results" here.
 
 
+### Replication Using Ecosystem Metadata
+
+An option to make you familiar with the projects is to replicate our research results from scratch.
+
+Our major research results in ICSE'24 paper include three parts, RUF lifetime (Result 1), RUF usage (Result 2), and RUF impact (Result 3). Results 2 relies on 1, and 3 relies on 2. So, the projects have similar dependencies, too.
+
+
+
 Execution flow dependency:
 
 1.1 rust_deps         -> 1.2 accuracy_evaluation (Ensure correctness)   -> 1.3 accurate_propagation
@@ -30,6 +38,12 @@ Execution flow dependency:
 
 3.1 test_feature      -> 1.3
 
+
+Our major research results in ICSE'24 paper include three parts, RUF lifetime (Result 1), RUF usage (Result 2), and RUF impact (Result 3). Results 2 relies on 1, and 3 relies on 2. So, the projects have similar dependencies, too.
+
+To get result 1, you should run `test_feature` to scan the Rustc source code and extract RUF definition information. In the meantime, you can execute `crate_downloader` to download source codes of all Rust packages while running `rust_deps` to get the Rust Ecosystem Dependency Graph (EDG). They can run in parallel. After executing `crate_downloader`, you can run `fetch_features` to get RUF usage (raw data). The `fetch_features` requires you to use our modified compiler in ./rust. Make sure that you have compiled it following the instructions. After running rust_deps and `fetch_features`, you can run `accurate_propagation` to get RUF impact (raw data).
+
+When all of these are done, you can refer to our sql file in `./scripts/research_results.sql`. 
 
 ### Code Count (2024-03-08)
 
