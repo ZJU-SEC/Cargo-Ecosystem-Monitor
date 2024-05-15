@@ -1,0 +1,6 @@
+psycopg2
+numpy
+matplotlib
+seaborn
+psycopg2
+statsmodels
