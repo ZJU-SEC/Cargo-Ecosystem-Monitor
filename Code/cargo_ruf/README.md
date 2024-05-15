@@ -18,7 +18,22 @@ Preparations ahead of running:
     SELECT DISTINCT(id) FROM tmp_ruf_impact WHERE status = 'removed' or status = 'unknown' 
     )
     ```
-    After 'on_process' ready, remember to add a rust-toolchain file, specifying 'nightly-2022-05-19'.
-- ruf_audit: please make sure the `ruf_audit` is ready to use, and the `ruf_audit` is in the same directory with `audit_pipeline`.
+    After 'on_process' ready, remember to add a rust-toolchain file under the directory `on_process` in the `crate_downloader` project, specifying 'nightly-2022-05-19'.
+- ruf_audit: please make sure the `ruf_audit` is ready to use through running the compilation command `cargo build` under the directory `ruf_audit`.
 
-And now you can run the pipeline simply with `cargo run`.
+And now you can run the `audit_pipeline` simply with `cargo run` under its directory.
+
+ATTENTION:
+
+1. We have found that if your shell contains env `RUSTC`, our audit tools may fail but behave successfully. You should unset the env though command `unset RUSTC` before execute any tools in the Ruf Audit project.
+   
+2. As the audit process needs heavy CPU and memory usage. We recommend that you limit the CPU and memory usage when running the audit pipeline. In linux-based OS, you can use cgroup to manage.
+   
+```bash
+sudo apt-get install cgroup-tools
+sudo cgcreate -t $USER:$USER -a $USER:$USER  -g cpu,memory:/rufAuditGroup
+cgset -r memory.limit_in_bytes=32G rufAuditGroup # You can set memory limit according to your machine
+cgset -r cpu.cfs_quota_us=75000 rufAuditGroup 
+cgset -r cpu.cfs_period_us=100000 rufAuditGroup # Allows at most 75000 us running every 100000us, or max CPU usage at 75%.
+cgexec -g memory,cpu:rufAuditGroup $your_command & # $your_command here should be `cargo run` under `audit_pipeline` directory.
+```
