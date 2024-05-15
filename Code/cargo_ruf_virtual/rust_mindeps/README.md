@@ -1,0 +1,1 @@
+This crates will resolve deps trees with minimal rules. The setup is the same as `rust_deps`.

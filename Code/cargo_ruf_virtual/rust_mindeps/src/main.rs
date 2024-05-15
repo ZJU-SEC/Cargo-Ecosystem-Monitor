@@ -1,33 +1,35 @@
+extern crate anyhow;
 extern crate crossbeam;
 extern crate simplelog;
 
 use simplelog::*;
 use std::fs::OpenOptions;
+use util::*;
 
 mod util;
-use util::run_audit;
 
 fn main() {
     CombinedLogger::init(vec![
         TermLogger::new(
-            LevelFilter::Info,
+            LevelFilter::Warn,
             simplelog::Config::default(),
             TerminalMode::Mixed,
             ColorChoice::Auto,
         ),
         WriteLogger::new(
-            LevelFilter::Warn,
+            LevelFilter::Info,
             simplelog::Config::default(),
             OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .append(true)
-                .open("./ruf_audit.log")
+                .open("./rust_mindeps.log")
                 .unwrap(),
         ),
     ])
     .unwrap();
 
-    run_audit(3, "undone");
+    run_deps(10, "undone");
+    // run_deps(20, "processing");
 }

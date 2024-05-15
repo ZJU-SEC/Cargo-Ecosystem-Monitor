@@ -1,18 +1,22 @@
 use std::fs;
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use crossbeam::channel;
 use lazy_static::lazy_static;
 use log::{error, info, warn};
 use postgres::{Client, NoTls};
 use regex::Regex;
+use wait_timeout::ChildExt;
 
-// Suffix of DB, used for test and other purposes.
-// It is empty by default. If it is not, it is not used for general purposes.
+// Used for sampling run, we select 1 crate from each SAMPLE_SKIP crates.
+const SAMPLE_SKIP: u32 = 1;
 const DB_SUFFIX: &str = "";
+
 const RUF_AUDIT: &str = "../ruf_audit/target/debug/ruf_audit";
 const CARGO_USAGE: &str = "../cargo_usage";
 const ON_PROCESS: &str = "../../crate_downloader/on_process/";
@@ -120,20 +124,24 @@ pub fn run_audit(workers: usize, status: &str) {
                         "--all-features",
                         "--all-targets",
                     ]);
-
                     // let mut audit = Command::new(&ruf_audit_path);
                     // audit.args(["--test", "--", "--all-features", "--all-targets"]);
                     audit.current_dir(&work_dir);
                     audit.env("CARGO_HOME", &cargo_home);
                     audit.env_remove("RUSTUP_TOOLCHAIN");
+                    audit.stdout(Stdio::piped());
+                    audit.stderr(Stdio::piped());
 
                     info!("Thread {i}: audit version {version} start", version = v.version_id);
 
-                    let output = match audit.output() {
-                        Ok(output) => output,
-                        Err(e) => {
+                    let mut child = audit.spawn().expect("cannot spawn audit");
+                    let stdout = child.stdout.take().expect("cannot take audit outputs");
+                    
+                    let exit_status = match child.wait_timeout(Duration::from_secs(60 * 2)).expect("cannot wait audit") {
+                        Some(status) => status,
+                        None => {
                             warn!(
-                                "Thread {i}: audit version {version} fails, due to error: {e}",
+                                "Thread {i}: audit version {version} timeout",
                                 version = v.version_id
                             );
                             store_audit_results(
@@ -141,19 +149,37 @@ pub fn run_audit(workers: usize, status: &str) {
                                 v.version_id,
                                 -1,
                                 (false, false, false, false),
-                                &e.to_string(),
+                                "audit timeout: 2mins",
                             );
-                            update_process_status(Arc::clone(&conn), v.version_id, "error2");
-                            continue;
+                            update_process_status(Arc::clone(&conn), v.version_id, "error_timeout");
+                            child.kill().expect("cannot kill childs");
+                            continue;  
                         }
                     };
 
                     info!("Thread {i}: audit version {version} end", version = v.version_id);
 
-                    let msg = String::from_utf8_lossy(&output.stdout);
-                    let msg = COLOR_CODES.replace_all(&msg, "");
+                    let mut reader = BufReader::new(stdout);
+                    let mut msg = String::new();
 
-                    let exit_code = output.status.code().unwrap_or(3);
+                    if let Err(e) = reader.read_to_string(&mut msg) {
+                        warn!(
+                            "Thread {i}: audit version {version} get output failed, due to error: {e}",
+                            version = v.version_id
+                        );
+                        store_audit_results(
+                            Arc::clone(&conn),
+                            v.version_id,
+                            -1,
+                            (false, false, false, false),
+                            &e.to_string(),
+                        );
+                        update_process_status(Arc::clone(&conn), v.version_id, "error_no_output");
+                        continue;
+                    }
+
+                    let msg = COLOR_CODES.replace_all(&msg, "");
+                    let exit_code = exit_status.code().unwrap_or(3);
                     if exit_code == 0 || exit_code == 2 {
                         let caps = TEST_RESULT.captures(&msg).unwrap();
                         let results = (
@@ -281,9 +307,17 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
                 &format!(
                     "
                     INSERT INTO ruf_audit_process_status{DB_SUFFIX} 
-                    SELECT DISTINCT ver, 'undone' FROM tmp_ruf_impact WHERE status = 'removed' or status = 'unknown'"
+                    SELECT ver, 'undone' FROM (
+                        SELECT *, ROW_NUMBER() OVER (ORDER BY ver) AS rn
+                        FROM (
+                            SELECT DISTINCT ver
+                            FROM tmp_ruf_impact
+                            WHERE status = 'removed' OR status = 'unknown'
+                        ) AS tmp
+                    ) AS ranked
+                    WHERE rn % $1 = 0"
                 ),
-                &[],
+                &[&SAMPLE_SKIP],
             )
             .unwrap();
     } else {
