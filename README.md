@@ -2,7 +2,7 @@
 
 Rust ecosystem analysis, mainly the Cargo ecosystem.
 
-Our first target issue is the **Rust unstable feature (RUF)**, published in [ICSE'24](https://dl.acm.org/doi/10.1145/3597503.3623352). 
+Our first target issue is the **Rust unstable feature (RUF)**, published in [ICSE'24](https://dl.acm.org/doi/10.1145/3597503.3623352). See  [released full paper here](./RustUnstableFeature_ICSE24.pdf).
 
 ## Motivation
 
