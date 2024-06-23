@@ -2,6 +2,8 @@
 
 Rust ecosystem analysis, mainly the Cargo ecosystem.
 
+Our first target issue is the **Rust unstable feature (RUF)**, published in [ICSE'24](https://dl.acm.org/doi/10.1145/3597503.3623352). 
+
 ## Motivation
 
 We focus on the research problem: Are there any security issues that have spread through dependencies across the ecosystem? We choose Rust/Cargo ecosystem as our target, as Rust highlights its security development along the way.
