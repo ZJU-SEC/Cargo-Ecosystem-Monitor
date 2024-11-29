@@ -1,0 +1,7 @@
+[package]
+name = "ruf_audit_virtual"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cargo-lock = { version = "10.0.0", features = ["dependency-tree"] }
