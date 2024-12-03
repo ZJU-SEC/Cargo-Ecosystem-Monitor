@@ -64,7 +64,7 @@ impl<D: DepOps> DepTreeManager<D> {
         let parents = self.get_parents(pkgnx);
         assert!(parents.len() >= 1, "Fatal, root has no parents");
 
-        let candidates = D::get_all_candidates(pkg.name.as_str())?;
+        let candidates = self.depops.get_all_candidates(pkg.name.as_str())?;
 
         // Early return.
         if candidates.is_empty() {
@@ -143,7 +143,7 @@ impl<D: DepOps> DepTreeManager<D> {
     }
 
     fn get_reqs(&self, name: &str, ver: &str) -> Result<Vec<(String, VersionReq)>, AuditError> {
-        D::get_pkg_versionreq(name, ver)
+        self.depops.get_pkg_versionreq(name, ver)
     }
 
     fn update_deptree(&mut self) -> Result<(), AuditError> {

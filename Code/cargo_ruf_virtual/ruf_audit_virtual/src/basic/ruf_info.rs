@@ -16,6 +16,24 @@ pub enum RufStatus {
     Removed,
 }
 
+impl CondRufs {
+    pub fn new(rufs: Vec<CondRuf>) -> Self {
+        CondRufs(rufs)
+    }
+
+    pub fn empty() -> Self {
+        CondRufs(Vec::new())
+    }
+
+    pub fn push(&mut self, ruf: CondRuf) {
+        self.0.push(ruf);
+    }
+
+    pub fn extend(&mut self, rufs: impl IntoIterator<Item = CondRuf>) {
+        self.0.extend(rufs.into_iter());
+    }
+}
+
 impl From<&str> for RufStatus {
     fn from(value: &str) -> Self {
         match value {
