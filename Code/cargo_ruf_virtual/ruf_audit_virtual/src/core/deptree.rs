@@ -29,8 +29,8 @@ impl<D: DepOps> DepTreeManager<D> {
         }
     }
 
-    pub fn extract_rufs(&self) -> Result<(), AuditError> {
-        unimplemented!()
+    pub fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError> {
+        self.depops.extract_rufs()
     }
 
     pub fn check_rufs(&self, rufs: Vec<String>) {

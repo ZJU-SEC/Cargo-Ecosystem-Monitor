@@ -1,6 +1,7 @@
 use std::env::current_dir;
 use std::fs::File;
 use std::io::Write;
+use std::mem::MaybeUninit;
 use std::str::FromStr;
 use std::sync::Mutex;
 
@@ -34,26 +35,47 @@ use crate::core::DepOps;
 */
 
 /// Colect needed info from our databases, we call it virtual impl.
+/// Used for virtual pipeline analysis.
 pub struct DepOpsVirt {
     /// For our database connection.
     conn: Mutex<Client>,
 
+    /// For the target crates.
+    name: String,
+    ver: String,
+    vid: i32,
+
     /// For the resolve result.
-    resolve: Mutex<Option<(Resolve, Lockfile)>>,
+    resolve: Option<Resolve>,
+    lockfile: Option<Lockfile>,
 }
 
 impl DepOpsVirt {
-    pub fn new() -> Self {
+    pub fn new(name: &str, ver: &str) -> Result<Self, AuditError> {
         let client = Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
             NoTls,
         )
         .unwrap();
 
-        Self {
+        let mut uninit = Self {
             conn: Mutex::new(client),
-            resolve: Mutex::new(None),
-        }
+            name: name.to_string(),
+            ver: ver.to_string(),
+            vid: 0,
+            resolve: None,
+            lockfile: None,
+        };
+
+        uninit.vid = uninit
+            .get_version_id_with_name_ver(name, ver)
+            .map_err(|e| AuditError::InnerError(e))?;
+
+        uninit
+            .resolve_current()
+            .map_err(|e| AuditError::InnerError(e))?;
+
+        Ok(uninit)
     }
 
     fn get_crate_id_with_name(&self, crate_name: &str) -> Result<i32, String> {
@@ -80,7 +102,7 @@ impl DepOpsVirt {
             .lock()
             .unwrap()
             .query(
-                "SELECT id FROM versions WHERE crate_id = (SELECT id FROM crates WHERE name = $1) AND num = $2 LIMIT 1",
+                "SELECT id FROM versions_with_name WHERE name = $1 AND num = $2 LIMIT 1",
                 &[&crate_name, &version],
             )
             .map_err(|e| e.to_string())?;
@@ -158,12 +180,11 @@ impl DepOpsVirt {
         Ok(dep_reqs)
     }
 
-    fn get_resolve_with_name_ver(&self, name: &str, ver: &str) -> Result<(), String> {
+    fn resolve_current(&mut self) -> Result<(), String> {
         let mut features = Vec::new();
 
         // Create virtual environment.
         // FIXME: Change the tmp home dir.
-        // let current_path = PathBuf::from("/tmp/virt_test");
         let current_path = current_dir().map_err(|e| e.to_string())?;
         let home_path = current_path.join("virt");
         let toml_path = current_path.join("virt.toml");
@@ -173,7 +194,7 @@ impl DepOpsVirt {
         }
 
         // Get virtual toml file
-        let file = self.format_virt_toml_file(name, ver, &features);
+        let file = self.format_virt_toml_file(&self.name, &self.ver, &features);
         File::create(&toml_path)
             .map_err(|e| e.to_string())?
             .write_all(file.as_bytes())
@@ -188,7 +209,7 @@ impl DepOpsVirt {
             &ws,
             &CliFeatures::new_all(true),
             HasDevUnits::No,
-            None,
+            self.resolve.as_ref(),
             None,
             &[],
             true,
@@ -196,7 +217,7 @@ impl DepOpsVirt {
         .map_err(|e| e.to_string())?;
 
         let pkg = resolve
-            .query(&format!("{}:{}", name, ver))
+            .query(&format!("{}:{}", &self.name, &self.ver))
             .map_err(|e| e.to_string())?;
         for feature in resolve.summary(pkg).features().keys() {
             features.push(feature.as_str());
@@ -204,7 +225,7 @@ impl DepOpsVirt {
 
         // 2. Resolve with features if found any.
         if !features.is_empty() {
-            let file = self.format_virt_toml_file(name, ver, &features);
+            let file = self.format_virt_toml_file(&self.name, &self.ver, &features);
             File::create(&toml_path)
                 .map_err(|e| e.to_string())?
                 .write_all(file.as_bytes())
@@ -228,28 +249,11 @@ impl DepOpsVirt {
             cargo::ops::resolve_to_string(&ws, &mut resolve).map_err(|e| e.to_string())?;
         let lockfile = Lockfile::from_str(&lockfile).map_err(|e| e.to_string())?;
 
-        *self.resolve.lock().unwrap() = Some((resolve, lockfile));
+        // Updates the resolve and lockfile.
+        self.resolve = Some(resolve);
+        self.lockfile = Some(lockfile);
 
         Ok(())
-    }
-
-    fn get_all_rufs_from_resolve(&self) -> FxHashSet<String> {
-        let mut rufs = FxHashSet::default();
-
-        let resolve = &*self.resolve.lock().unwrap();
-        let resolve = &resolve.as_ref().expect("Fatal, resolve is None").0;
-
-        for pkg_id in resolve.iter() {
-            let pf = resolve.features(pkg_id);
-            let pkg_rufs = self.get_pkg_rufs_with_pf(&pkg_id, &pf);
-            rufs.extend(pkg_rufs);
-        }
-
-        rufs
-    }
-
-    fn get_pkg_rufs_with_pf(&self, pkg: &PackageId, pf: &[InternedString]) -> Vec<String> {
-        unimplemented!()
     }
 
     fn format_virt_toml_file(&self, name: &str, ver: &str, features: &Vec<&str>) -> String {
@@ -271,6 +275,27 @@ impl DepOpsVirt {
         ));
 
         file
+    }
+
+    fn extract_rufs_from_current_resolve(&self) -> Result<FxHashMap<String, Vec<String>>, String> {
+        let mut rufs = FxHashMap::default();
+        let resolve = self.resolve.as_ref().unwrap();
+        for pkg_id in resolve.iter() {
+            let pkg_features = resolve.features(pkg_id);
+            let pkg_rufs = self.extract_rufs_from_one_pkg(&pkg_id, pkg_features)?;
+
+            rufs.insert(pkg_id.name().to_string(), pkg_rufs);
+        }
+
+        Ok(rufs)
+    }
+
+    fn extract_rufs_from_one_pkg(
+        &self,
+        pkg: &PackageId,
+        pkg_feature: &[InternedString],
+    ) -> Result<Vec<String>, String> {
+        unimplemented!()
     }
 }
 
@@ -299,38 +324,26 @@ impl DepOps for DepOpsVirt {
             .map_err(|e| AuditError::InnerError(e))
     }
 
-    /// Get current deptree used rufs from our database.
-    fn get_current_rufs(&self) {
-        unimplemented!();
-    }
-
+    /// Get dependency tree from current resolve.
     fn get_deptree(&self) -> Result<Tree, AuditError> {
-        self.resolve
-            .lock()
-            .unwrap()
+        self.lockfile
             .as_ref()
             .unwrap()
-            .1
             .dependency_tree()
             .map_err(|e| AuditError::InnerError(e.to_string()))
+    }
+
+    /// Extract all used rufs from current resolve.
+    fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError> {
+        self.extract_rufs_from_current_resolve()
+            .map_err(|e| AuditError::InnerError(e))
     }
 }
 
 #[test]
 fn test_DepOpsVirt() {
-    let depops = DepOpsVirt::new();
+    let depops = DepOpsVirt::new("caisin", "0.1.0").unwrap();
 
-    // let res = depops.get_reqs_with_version_id(600254).unwrap();
-    // for (v, req) in res {
-    //     println!("{}: {}", v, req);
-    // }
-
-    // let res = depops.get_rufs_with_crate_id(323512).unwrap();
-    // for (v, rufs) in res {
-    //     println!("{}: {:?}", v, rufs);
-    // }
-
-    depops
-        .get_resolve_with_name_ver("caisin", "0.1.57")
-        .unwrap();
+    let tree = depops.get_deptree();
+    println!("{:?}", tree);
 }

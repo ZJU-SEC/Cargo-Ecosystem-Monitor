@@ -13,6 +13,7 @@ pub trait DepOps {
         ver: &str,
     ) -> Result<Vec<(String, VersionReq)>, AuditError>;
 
-    fn get_current_rufs(&self);
     fn get_deptree(&self) -> Result<Tree, AuditError>;
+
+    fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError>;
 }
