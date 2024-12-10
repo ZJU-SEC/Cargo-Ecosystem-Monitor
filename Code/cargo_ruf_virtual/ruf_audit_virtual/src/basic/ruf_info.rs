@@ -59,3 +59,12 @@ impl From<u32> for RufStatus {
         }
     }
 }
+
+impl RufStatus {
+    pub fn is_usable(&self) -> bool {
+        match self {
+            Self::Removed | Self::Unknown => false,
+            _ => true,
+        }
+    }
+}

@@ -16,4 +16,6 @@ pub trait DepOps {
     fn get_deptree(&self) -> Result<Tree, AuditError>;
 
     fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError>;
+    fn resolve_condrufs(&self, condrufs: CondRufs) -> Result<Vec<String>, AuditError>;
+    fn check_rufs(&self, rustv: u32, rufs: &Vec<String>) -> bool;
 }

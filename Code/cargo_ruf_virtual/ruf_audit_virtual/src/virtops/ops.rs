@@ -1,32 +1,32 @@
 use std::env::current_dir;
 use std::fs::File;
 use std::io::Write;
-use std::mem::MaybeUninit;
 use std::str::FromStr;
 use std::sync::Mutex;
 
 use cargo::core::registry::PackageRegistry;
 use cargo::core::resolver::{CliFeatures, HasDevUnits};
-use cargo::core::{PackageId, Resolve, Shell, Workspace};
+use cargo::core::{Resolve, Shell, Workspace};
 use cargo::util::interning::InternedString;
 
 use cargo_lock::dependency::Tree;
 use cargo_lock::{Lockfile, Version};
 use fxhash::{FxHashMap, FxHashSet};
 use postgres::{Client, NoTls};
+use regex::Regex;
 use semver::VersionReq;
 
-use crate::basic::{CondRuf, CondRufs};
+use crate::basic::{self, CondRuf, CondRufs};
 use crate::core::AuditError;
 use crate::core::DepOps;
 
 /*
     -- Currently we HAVE NOT created this table --
     CREATE VIEW version_ruf AS
-    SELECT versions_with_name.id, versions_with_name.name, versions_with_name.num, versions_with_name.crate_id, version_feature_ori.conds, version_feature_ori.feature
+    SELECT versions_with_name.id, versions_with_name.name, versions_with_name.num, versions_with_name.crate_id, version_feature.conds, version_feature.feature
     FROM versions_with_name
-    JOIN version_feature_ori
-    ON versions_with_name.id = version_feature_ori.id
+    JOIN version_feature
+    ON versions_with_name.id = version_feature.id
 
     CREATE VIEW dependencies_with_name AS
     SELECT dependencies.*, crates.name AS crate_name
@@ -51,7 +51,7 @@ pub struct DepOpsVirt {
 }
 
 impl DepOpsVirt {
-    pub fn new(name: &str, ver: &str) -> Result<Self, AuditError> {
+    pub fn new(name: &str, ver: &str, id: i32) -> Result<Self, AuditError> {
         let client = Client::connect(
             "host=localhost dbname=crates user=postgres password=postgres",
             NoTls,
@@ -62,14 +62,10 @@ impl DepOpsVirt {
             conn: Mutex::new(client),
             name: name.to_string(),
             ver: ver.to_string(),
-            vid: 0,
+            vid: id,
             resolve: None,
             lockfile: None,
         };
-
-        uninit.vid = uninit
-            .get_version_id_with_name_ver(name, ver)
-            .map_err(|e| AuditError::InnerError(e))?;
 
         uninit
             .resolve_current()
@@ -281,8 +277,13 @@ impl DepOpsVirt {
         let mut rufs = FxHashMap::default();
         let resolve = self.resolve.as_ref().unwrap();
         for pkg_id in resolve.iter() {
+            // FIXME： Do we get the used pf correctly or not ?
             let pkg_features = resolve.features(pkg_id);
-            let pkg_rufs = self.extract_rufs_from_one_pkg(&pkg_id, pkg_features)?;
+            let pkg_rufs = self.extract_rufs_from_one_pkg(
+                &pkg_id.name().as_str(),
+                &pkg_id.version().to_string(),
+                pkg_features,
+            )?;
 
             rufs.insert(pkg_id.name().to_string(), pkg_rufs);
         }
@@ -292,10 +293,43 @@ impl DepOpsVirt {
 
     fn extract_rufs_from_one_pkg(
         &self,
-        pkg: &PackageId,
+        name: &str,
+        ver: &str,
         pkg_feature: &[InternedString],
     ) -> Result<Vec<String>, String> {
-        unimplemented!()
+        let mut rufs = FxHashSet::default();
+        let rows = self
+            .conn
+            .lock()
+            .unwrap()
+            .query(
+                "SELECT conds, feature FROM version_ruf WHERE name = $1 AND version = $2 and feature != 'no_feature_used'",
+                &[&name, &ver],
+            )
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            let cond = row.get::<usize, Option<String>>(0);
+            let feature = row.get::<usize, String>(1);
+
+            // Check the conditions and add the feature if enabled.
+            if let Some(cond) = cond {
+                assert!(!cond.is_empty());
+                lazy_static::lazy_static! {
+                    static ref RE_CONDS: Regex = Regex::new(r#"feature\s*=\s*"(.*?)""#).unwrap();
+                }
+                if let Some(caps) = RE_CONDS.captures(&cond) {
+                    let cond_pf = caps.get(1).expect("Fatal, invalid regex capture").as_str();
+                    if pkg_feature.contains(&InternedString::new(cond_pf)) {
+                        rufs.insert(feature);
+                    }
+                } // Or it's not `feature = "xxx"` condition, we assume it not enabled.
+            } else {
+                rufs.insert(feature);
+            }
+        }
+
+        Ok(rufs.drain().collect())
     }
 }
 
@@ -338,12 +372,33 @@ impl DepOps for DepOpsVirt {
         self.extract_rufs_from_current_resolve()
             .map_err(|e| AuditError::InnerError(e))
     }
+
+    fn resolve_condrufs(&self, condrufs: CondRufs) -> Result<Vec<String>, AuditError> {
+        // FIXME: impl resolve condrufs.
+        unimplemented!()
+    }
+
+    fn check_rufs(&self, rustv: u32, rufs: &Vec<String>) -> bool {
+        assert!(rustv < basic::RUSTC_VER_NUM as u32);
+        if rufs
+            .iter()
+            .filter(|ruf| !basic::get_ruf_status(ruf, rustv).is_usable())
+            .count()
+            > 0
+        {
+            return false;
+        }
+
+        return true;
+    }
 }
 
 #[test]
 fn test_DepOpsVirt() {
-    let depops = DepOpsVirt::new("caisin", "0.1.0").unwrap();
+    let depops = DepOpsVirt::new("caisin", "0.1.0", 0).unwrap();
 
     let tree = depops.get_deptree();
     println!("{:?}", tree);
+
+    // FIXME: We need more tests on helper functions.
 }
