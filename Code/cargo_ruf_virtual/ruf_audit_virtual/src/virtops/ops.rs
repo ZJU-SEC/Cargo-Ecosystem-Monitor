@@ -45,6 +45,9 @@ pub struct DepOpsVirt {
     ver: String,
     vid: i32,
 
+    /// The local crates.
+    locals: FxHashMap<String, Vec<(String, VersionReq)>>,
+
     /// For the resolve result.
     resolve: Option<Resolve>,
     lockfile: Option<Lockfile>,
@@ -58,11 +61,20 @@ impl DepOpsVirt {
         )
         .unwrap();
 
+        let mut locals = FxHashMap::default();
+        let virt_req = VersionReq::parse(&format!("={}", ver))
+            .map_err(|e| AuditError::InnerError(e.to_string()))?;
+        locals.insert("virt".to_string(), vec![(name.to_string(), virt_req)]);
+
         let mut uninit = Self {
             conn: Mutex::new(client),
+
             name: name.to_string(),
             ver: ver.to_string(),
             vid: id,
+
+            locals: locals,
+
             resolve: None,
             lockfile: None,
         };
@@ -169,7 +181,7 @@ impl DepOpsVirt {
             let req = VersionReq::parse(&req)
                 .map_err(|e| format!("VersionReq parse failure, invalid req: {} {}", req, e))?;
 
-            // FIXME: Currently we ignore the optional, feature, target...
+            // FIXME: Currently we DONOT care the optional, feature, target...
             dep_reqs.push((name, req));
         }
 
@@ -277,7 +289,7 @@ impl DepOpsVirt {
         let mut rufs = FxHashMap::default();
         let resolve = self.resolve.as_ref().unwrap();
         for pkg_id in resolve.iter() {
-            // FIXME： Do we get the used pf correctly or not ?
+            // FIXME: Do we get the used pf correctly or not ?
             let pkg_features = resolve.features(pkg_id);
             let pkg_rufs = self.extract_rufs_from_one_pkg(
                 &pkg_id.name().as_str(),
@@ -334,8 +346,12 @@ impl DepOpsVirt {
 }
 
 impl DepOps for DepOpsVirt {
-    /// Get maybe usable versions from our database.
     fn get_all_candidates(&self, name: &str) -> Result<FxHashMap<Version, CondRufs>, AuditError> {
+        // Check locals first
+        if self.locals.contains_key(name) {
+            return Ok(FxHashMap::default());
+        }
+
         let crate_id = self
             .get_crate_id_with_name(name)
             .map_err(|e| AuditError::InnerError(e))?;
@@ -344,12 +360,16 @@ impl DepOps for DepOpsVirt {
             .map_err(|e| AuditError::InnerError(e))
     }
 
-    /// Get version requirements from our database.
     fn get_pkg_versionreq(
         &self,
         name: &str,
         ver: &str,
     ) -> Result<Vec<(String, VersionReq)>, AuditError> {
+        // Check locals first
+        if let Some(localreq) = self.locals.get(name) {
+            return Ok(localreq.clone());
+        }
+
         let version_id = self
             .get_version_id_with_name_ver(name, ver)
             .map_err(|e| AuditError::InnerError(e))?;
@@ -358,7 +378,6 @@ impl DepOps for DepOpsVirt {
             .map_err(|e| AuditError::InnerError(e))
     }
 
-    /// Get dependency tree from current resolve.
     fn get_deptree(&self) -> Result<Tree, AuditError> {
         self.lockfile
             .as_ref()
@@ -367,7 +386,6 @@ impl DepOps for DepOpsVirt {
             .map_err(|e| AuditError::InnerError(e.to_string()))
     }
 
-    /// Extract all used rufs from current resolve.
     fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError> {
         self.extract_rufs_from_current_resolve()
             .map_err(|e| AuditError::InnerError(e))
@@ -390,6 +408,11 @@ impl DepOps for DepOpsVirt {
         }
 
         return true;
+    }
+
+    fn update_pkg(&self, name: &str, prev_ver: &str, new_ver: &str) -> Result<(), AuditError> {
+        // FIXME: impl update_pkg.
+        unimplemented!();
     }
 }
 
