@@ -5,6 +5,7 @@ use cargo_lock::dependency::{
     Tree,
 };
 use fxhash::FxHashMap;
+use log::debug;
 use petgraph::visit::EdgeRef;
 use semver::Version;
 
@@ -72,12 +73,14 @@ impl<D: DepOps> DepTreeManager<D> {
     /// Get usable candidates of a node that match it's parents' version req, and free from rufs issues.
     pub fn get_candidates(&self, pkgnx: NodeIndex) -> Result<Vec<Version>, AuditError> {
         let graph = self.get_graph();
-        let pkg = &graph[pkgnx];
+        let dep = &graph[pkgnx];
+        let dep_name = dep.name.to_string();
+        let dep_ver = dep.version.to_string();
 
         let parents = self.get_parents(pkgnx);
         assert!(parents.len() >= 1, "Fatal, root has no parents");
 
-        let candidates = self.depops.get_all_candidates(pkg.name.as_str())?;
+        let candidates = self.depops.get_all_candidates(&dep_name)?;
 
         if candidates.is_empty() {
             // FIXME: This shall be another kinds of issues.
@@ -88,14 +91,13 @@ impl<D: DepOps> DepTreeManager<D> {
         let mut version_reqs = Vec::new();
         for p in parents {
             let p_pkg = &graph[p];
-            let meta = self
-                .depops
-                .get_pkg_versionreq(p_pkg.name.as_str(), p_pkg.version.to_string().as_str())?;
+            let p_name = p_pkg.name.as_str();
+            let p_ver = p_pkg.version.to_string();
+
+            let mut meta = self.depops.get_pkg_versionreq(p_name, &p_ver)?;
             let req = meta
-                .into_iter()
-                .find(|(name, _)| name == pkg.name.as_str())
-                .expect("Fatal, cannot find dependency in parent package")
-                .1;
+                .remove(&dep_name)
+                .expect("Fatal, cannot find dependency in parent package");
             // prepare for relaxing strict parents.
             let lowest = candidates
                 .keys()
@@ -126,9 +128,16 @@ impl<D: DepOps> DepTreeManager<D> {
         // we will record who restricts the version most, for later up fix.
         let mut usable = Vec::new();
         for (ver, condrufs) in candidates.into_iter().filter(|(ver, _)| {
-            version_reqs.iter().all(|(_, req, _)| req.matches(ver)) && ver < &pkg.version
+            version_reqs.iter().all(|(_, req, _)| req.matches(ver)) && ver < &dep.version
         }) {
-            let rufs = self.depops.resolve_condrufs(condrufs)?;
+            let rufs = self
+                .depops
+                .resolve_condrufs(&dep_name, &dep_ver, condrufs)?;
+            println!(
+                "[Deptree Debug] get_candidates: check version {} with rufs: {:?}",
+                ver, rufs
+            );
+
             if self.depops.check_rufs(self.rustv, &rufs) {
                 usable.push(ver);
             }
@@ -159,25 +168,30 @@ impl<D: DepOps> DepTreeManager<D> {
         let cur_req = self
             .depops
             .get_pkg_versionreq(parent_name, &parent_ver)?
-            .into_iter()
-            .find(|(name, _)| name == dep_name)
-            .expect("Fatal, cannot find dependency in parent package")
-            .1;
+            .remove(dep_name)
+            .expect("Fatal, cannot find dependency in parent package");
 
         let mut usable = vec![];
         for cad in parent_candidates {
-            let reqs = self
+            let mut reqs = self
                 .depops
                 .get_pkg_versionreq(parent_name, cad.to_string().as_str())?;
 
-            if let Some((_, req)) = reqs.into_iter().find(|(name, _)| name == dep_name) {
+            println!(
+                "[Deptree Debug] get_upfix_candidates: check version {} cur_req: {}, new_req: {:?}",
+                cad,
+                cur_req,
+                reqs.get(dep_name).map(|req| req.to_string())
+            );
+
+            if let Some(req) = reqs.remove(dep_name) {
                 // We take the assumption that, older verison shall have looser semver req,
                 // so if req differs, we assume it's a candidate, since semver comparision can be hard.
                 if req != cur_req {
                     usable.push(cad);
                 }
             } else {
-                // dep not found, possibily not used, thus ok.
+                // dep not found, possibily not used, thus ok too.
                 usable.push(cad);
             }
         }

@@ -5,9 +5,9 @@ use super::ops::DepOpsVirt;
 use crate::core::{AuditError, DepTreeManager};
 
 /// The main audit function
-pub fn audit(name: &str, ver: &str, version_id: i32) -> Result<(), AuditError> {
+pub fn audit(name: &str, ver: &str, workspace: &str) -> Result<(), AuditError> {
     // Init a tree first
-    let ops = DepOpsVirt::new(name, ver, version_id)?;
+    let ops = DepOpsVirt::new(name, ver, workspace)?;
     let deptree = DepTreeManager::new(ops, 63)?;
 
     // Check if the rufs are usable and try fix if not.
@@ -28,7 +28,12 @@ fn check_fix(mut deptree: DepTreeManager<DepOpsVirt>) -> Result<(), AuditError> 
         let mut bfs = visit::Bfs::new(&graph, root);
         while let Some(nx) = bfs.next(&graph) {
             let node = &graph[nx];
-            if let Some(rufs) = used_rufs.get(node.name.as_str()) {
+            let name_ver = format!("{}@{}", node.name, node.version);
+            if let Some(rufs) = used_rufs.get(&name_ver) {
+                println!(
+                    "[VirtAudit Debug] check_fix: checking {}@{} rufs: {:?}",
+                    node.name, node.version, rufs
+                );
                 if !deptree.check_rufs(rufs) {
                     // Ok here we got issues
                     issue_dep = Some((nx, node));
@@ -39,14 +44,24 @@ fn check_fix(mut deptree: DepTreeManager<DepOpsVirt>) -> Result<(), AuditError> 
 
         if issue_dep.is_none() {
             // No rufs issue found (but other problem may exists).
+            println!("[VirtAudit Debug] check_fix: No rufs issue found, OK!");
             return Ok(());
         }
 
         // Or we try to fix it.
         let (issue_depnx, issue_dep) = issue_dep.unwrap();
+        println!(
+            "[VirtAudit Debug] check_fix: Found issue dep: {}@{}",
+            issue_dep.name, issue_dep.version
+        );
 
         // Canditate versions, filtered by semver reqs and ruf issues.
         let candidate_vers = deptree.get_candidates(issue_depnx)?;
+        println!(
+            "[VirtAudit Debug] check_fix: Found {} candidates: {:?}",
+            candidate_vers.len(),
+            candidate_vers.iter().map(|v| v.to_string())
+        );
 
         // Let's say, we choose the max canditate and check whether this can fix the issues.
         let choose = candidate_vers.into_iter().max();
@@ -55,6 +70,10 @@ fn check_fix(mut deptree: DepTreeManager<DepOpsVirt>) -> Result<(), AuditError> 
             let prev_ver = issue_dep.version.to_string();
             let fix_ver = fix.to_string();
 
+            println!(
+                "[VirtAudit Debug] check_fix: Try fixing issue dep {}@{} -> {}",
+                dep_name, prev_ver, fix_ver
+            );
             deptree.update_pkg(&dep_name, &prev_ver, &fix_ver)?;
 
             // Ok, we loop back and check rufs again.
@@ -83,7 +102,19 @@ fn upfix(
 
     let graph = deptree.get_graph();
     let parent_pkg = &graph[strict_parent_pkgnx];
+
+    println!(
+        "[VirtAudit Debug] upfix: No candidate found, try up fix parent: {}@{}",
+        parent_pkg.name, parent_pkg.version
+    );
+
     let parent_candidates = deptree.get_upfix_candidates(strict_parent_pkgnx, issue_depnx)?;
+
+    println!(
+        "[VirtAudit Debug] upfix: Found {} candidates: {:?}",
+        parent_candidates.len(),
+        parent_candidates.iter().map(|v| v.to_string())
+    );
 
     // And we choose the max version to try fixing loose parent's req on issue_dep.
     let choose = parent_candidates.into_iter().max();
@@ -91,6 +122,11 @@ fn upfix(
         let name = parent_pkg.name.to_string();
         let prev_ver = parent_pkg.version.to_string();
         let fix_ver = fix.to_string();
+
+        println!(
+            "[VirtAudit Debug] upfix: Try fixing parent {}@{} -> {}",
+            parent_pkg.name, parent_pkg.version, fix
+        );
 
         deptree.update_pkg(&name, &prev_ver, &fix_ver)?;
         // Ok, let go back.
@@ -100,4 +136,11 @@ fn upfix(
         // Or maybe, we have to go upper and fix parent's parents.
         upfix(deptree, strict_parent_pkgnx)
     }
+}
+
+#[test]
+fn test_audit() {
+    const WORKSPACE_PATH: &str = "/home/ubuntu/Workspaces/Cargo-Ecosystem-Monitor/Code/cargo_ruf_virtual/ruf_audit_virtual/virt_work";
+
+    audit("taxonomy", "0.3.1", WORKSPACE_PATH).unwrap(); // It cannot be fixed.
 }

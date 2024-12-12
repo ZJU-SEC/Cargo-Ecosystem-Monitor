@@ -32,6 +32,10 @@ impl CondRufs {
     pub fn extend(&mut self, rufs: impl IntoIterator<Item = CondRuf>) {
         self.0.extend(rufs.into_iter());
     }
+
+    pub fn inner(self) -> Vec<CondRuf> {
+        self.0
+    }
 }
 
 impl From<&str> for RufStatus {

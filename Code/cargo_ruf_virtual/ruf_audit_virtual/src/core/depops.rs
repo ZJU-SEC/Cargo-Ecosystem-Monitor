@@ -13,7 +13,7 @@ pub trait DepOps {
         &self,
         name: &str,
         ver: &str,
-    ) -> Result<Vec<(String, VersionReq)>, AuditError>;
+    ) -> Result<FxHashMap<String, VersionReq>, AuditError>;
 
     /// Get the dependency tree of current package.
     fn get_deptree(&self) -> Result<Tree, AuditError>;
@@ -21,10 +21,15 @@ pub trait DepOps {
     /// Extract the rufs from the dependency tree.
     fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError>;
     /// Resolve the condrufs to rufs based on current dependency tree.
-    fn resolve_condrufs(&self, condrufs: CondRufs) -> Result<Vec<String>, AuditError>;
+    fn resolve_condrufs(
+        &self,
+        name: &str,
+        ver: &str,
+        condrufs: CondRufs,
+    ) -> Result<Vec<String>, AuditError>;
     /// Check if the rufs are usable.
     fn check_rufs(&self, rustv: u32, rufs: &Vec<String>) -> bool;
 
     /// Update current dependency tree.
-    fn update_pkg(&self, name: &str, prev_ver: &str, new_ver: &str) -> Result<(), AuditError>;
+    fn update_pkg(&mut self, name: &str, prev_ver: &str, new_ver: &str) -> Result<(), AuditError>;
 }
