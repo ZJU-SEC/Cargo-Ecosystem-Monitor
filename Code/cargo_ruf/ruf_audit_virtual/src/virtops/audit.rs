@@ -1,20 +1,31 @@
+use std::io::Write;
+
 use cargo_lock::dependency::graph::NodeIndex;
 use petgraph::visit;
 
 use super::ops::DepOpsVirt;
 use crate::core::{AuditError, DepTreeManager};
 
-/// The main audit function
-pub fn audit(name: &str, ver: &str, workspace: &str) -> Result<(), AuditError> {
+/// The main audit function.
+/// The debugger receives an output stream to write debug information.
+pub fn audit(
+    name: &str,
+    ver: &str,
+    workspace: &str,
+    debugger: &mut impl Write,
+) -> Result<(), AuditError> {
     // Init a tree first
     let ops = DepOpsVirt::new(name, ver, workspace)?;
     let deptree = DepTreeManager::new(ops, 63)?;
 
     // Check if the rufs are usable and try fix if not.
-    check_fix(deptree)
+    check_fix(deptree, debugger)
 }
 
-fn check_fix(mut deptree: DepTreeManager<DepOpsVirt>) -> Result<(), AuditError> {
+fn check_fix(
+    mut deptree: DepTreeManager<DepOpsVirt>,
+    debugger: &mut impl Write,
+) -> Result<(), AuditError> {
     loop {
         // Extract current used rufs.
         let used_rufs = deptree.extract_rufs()?;
@@ -30,10 +41,12 @@ fn check_fix(mut deptree: DepTreeManager<DepOpsVirt>) -> Result<(), AuditError> 
             let node = &graph[nx];
             let name_ver = format!("{}@{}", node.name, node.version);
             if let Some(rufs) = used_rufs.get(&name_ver) {
-                println!(
+                writeln!(
+                    debugger,
                     "[VirtAudit Debug] check_fix: checking {}@{} rufs: {:?}",
                     node.name, node.version, rufs
-                );
+                )
+                .unwrap();
                 if !deptree.check_rufs(rufs) {
                     // Ok here we got issues
                     issue_dep = Some((nx, node));
@@ -44,24 +57,35 @@ fn check_fix(mut deptree: DepTreeManager<DepOpsVirt>) -> Result<(), AuditError> 
 
         if issue_dep.is_none() {
             // No rufs issue found (but other problem may exists).
-            println!("[VirtAudit Debug] check_fix: No rufs issue found, OK!");
+            writeln!(
+                debugger,
+                "[VirtAudit Debug] check_fix: No rufs issue found, OK!"
+            )
+            .unwrap();
             return Ok(());
         }
 
         // Or we try to fix it.
         let (issue_depnx, issue_dep) = issue_dep.unwrap();
-        println!(
+        writeln!(
+            debugger,
             "[VirtAudit Debug] check_fix: Found issue dep: {}@{}",
             issue_dep.name, issue_dep.version
-        );
+        )
+        .unwrap();
 
         // Canditate versions, filtered by semver reqs and ruf issues.
-        let candidate_vers = deptree.get_candidates(issue_depnx)?;
-        println!(
+        let candidate_vers = deptree.get_candidates(issue_depnx, debugger)?;
+        writeln!(
+            debugger,
             "[VirtAudit Debug] check_fix: Found {} candidates: {:?}",
             candidate_vers.len(),
-            candidate_vers.iter().map(|v| v.to_string())
-        );
+            candidate_vers
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<String>>()
+        )
+        .unwrap();
 
         // Let's say, we choose the max canditate and check whether this can fix the issues.
         let choose = candidate_vers.into_iter().max();
@@ -70,16 +94,18 @@ fn check_fix(mut deptree: DepTreeManager<DepOpsVirt>) -> Result<(), AuditError> 
             let prev_ver = issue_dep.version.to_string();
             let fix_ver = fix.to_string();
 
-            println!(
+            writeln!(
+                debugger,
                 "[VirtAudit Debug] check_fix: Try fixing issue dep {}@{} -> {}",
                 dep_name, prev_ver, fix_ver
-            );
+            )
+            .unwrap();
             deptree.update_pkg(&dep_name, &prev_ver, &fix_ver)?;
 
             // Ok, we loop back and check rufs again.
         } else {
             // Or we have to do an up fix.
-            upfix(&mut deptree, issue_depnx)?;
+            upfix(&mut deptree, issue_depnx, debugger)?;
         }
     }
 
@@ -89,6 +115,7 @@ fn check_fix(mut deptree: DepTreeManager<DepOpsVirt>) -> Result<(), AuditError> 
 fn upfix(
     deptree: &mut DepTreeManager<DepOpsVirt>,
     issue_depnx: NodeIndex,
+    debugger: &mut impl Write,
 ) -> Result<(), AuditError> {
     // So who restrict our issue dep ?
     let strict_parent_pkgnx = match deptree.get_limit_by(issue_depnx) {
@@ -100,21 +127,35 @@ fn upfix(
         }
     };
 
+    if strict_parent_pkgnx == deptree.get_root() {
+        return Err(AuditError::FunctionError(
+            "Up fix failed, root reached".to_string(),
+        ));
+    }
+
     let graph = deptree.get_graph();
     let parent_pkg = &graph[strict_parent_pkgnx];
 
-    println!(
+    writeln!(
+        debugger,
         "[VirtAudit Debug] upfix: No candidate found, try up fix parent: {}@{}",
         parent_pkg.name, parent_pkg.version
-    );
+    )
+    .unwrap();
 
-    let parent_candidates = deptree.get_upfix_candidates(strict_parent_pkgnx, issue_depnx)?;
+    let parent_candidates =
+        deptree.get_upfix_candidates(strict_parent_pkgnx, issue_depnx, debugger)?;
 
-    println!(
+    writeln!(
+        debugger,
         "[VirtAudit Debug] upfix: Found {} candidates: {:?}",
         parent_candidates.len(),
-        parent_candidates.iter().map(|v| v.to_string())
-    );
+        parent_candidates
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<String>>()
+    )
+    .unwrap();
 
     // And we choose the max version to try fixing loose parent's req on issue_dep.
     let choose = parent_candidates.into_iter().max();
@@ -123,10 +164,12 @@ fn upfix(
         let prev_ver = parent_pkg.version.to_string();
         let fix_ver = fix.to_string();
 
-        println!(
+        writeln!(
+            debugger,
             "[VirtAudit Debug] upfix: Try fixing parent {}@{} -> {}",
             parent_pkg.name, parent_pkg.version, fix
-        );
+        )
+        .unwrap();
 
         deptree.update_pkg(&name, &prev_ver, &fix_ver)?;
         // Ok, let go back.
@@ -134,13 +177,20 @@ fn upfix(
         Ok(())
     } else {
         // Or maybe, we have to go upper and fix parent's parents.
-        upfix(deptree, strict_parent_pkgnx)
+        upfix(deptree, strict_parent_pkgnx, debugger)
     }
 }
 
 #[test]
 fn test_audit() {
-    const WORKSPACE_PATH: &str = "/home/ubuntu/Workspaces/Cargo-Ecosystem-Monitor/Code/cargo_ruf_virtual/ruf_audit_virtual/virt_work";
+    use std::sync::{Arc, Mutex};
 
-    audit("taxonomy", "0.3.1", WORKSPACE_PATH).unwrap(); // It cannot be fixed.
+    const WORKSPACE_PATH: &str = "/home/ubuntu/Workspaces/Cargo-Ecosystem-Monitor/Code/cargo_ruf/ruf_audit_virtual/virt_work";
+    let stdout = Arc::new(Mutex::new(std::io::stdout()));
+    let mut buffer = stdout.lock().unwrap();
+
+    // let (output, res) = audit("taxonomy", "0.3.1", WORKSPACE_PATH); // It cannot be fixed.
+    // let (_output, res) = audit("tar", "0.3.1", WORKSPACE_PATH);
+    let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
+    println!("RESULTS: {:?}", res);
 }

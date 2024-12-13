@@ -444,10 +444,6 @@ impl DepOpsVirt {
         ver: &str,
         pkg_feature: &[InternedString],
     ) -> Result<Vec<String>, String> {
-        // println!(
-        //     "[Debug] Extracting rufs from {}-{} with pf: {:?}",
-        //     name, ver, pkg_feature
-        // );
         let mut rufs = FxHashSet::default();
         let rows = self
             .conn
@@ -468,7 +464,6 @@ impl DepOpsVirt {
                 assert!(!cond.is_empty());
                 if let Some(caps) = RE_CONDS.captures(&cond) {
                     let cond_pf = caps.get(1).expect("Fatal, invalid regex capture").as_str();
-                    // println!("[Debug] cond_pf: {}, ruf: {}", cond_pf, feature);
                     if pkg_feature.contains(&InternedString::new(cond_pf)) {
                         rufs.insert(feature);
                     }
@@ -558,17 +553,6 @@ impl DepOps for DepOpsVirt {
     }
 
     fn check_rufs(&self, rustv: u32, rufs: &Vec<String>) -> bool {
-        assert!(rustv < basic::RUSTC_VER_NUM as u32);
-
-        let mut res = Vec::new();
-    
-        for ruf in rufs {
-            if !basic::get_ruf_status(ruf, rustv).is_usable() {
-                res.push(ruf.as_str());
-            }
-        }
-        println!("[Debug] check_rufs: error rufs: {:?}",res);
-    
         if rufs
             .iter()
             .filter(|ruf| !basic::get_ruf_status(ruf, rustv).is_usable())
@@ -581,6 +565,12 @@ impl DepOps for DepOpsVirt {
         return true;
     }
 
+    fn filter_issue_rufs(&self, rustv: u32, rufs: Vec<String>) -> Vec<String> {
+        rufs.into_iter()
+            .filter(|ruf| !basic::get_ruf_status(&ruf, rustv).is_usable())
+            .collect()
+    }
+
     fn update_pkg(&mut self, name: &str, prev_ver: &str, new_ver: &str) -> Result<(), AuditError> {
         self.update_resolve(name, prev_ver, new_ver)
             .map_err(|e| AuditError::InnerError(e))
@@ -590,7 +580,7 @@ impl DepOps for DepOpsVirt {
 #[test]
 #[allow(non_snake_case)]
 fn test_DepOpsVirt() {
-    const WORKSPACE_PATH: &str = "/home/ubuntu/Workspaces/Cargo-Ecosystem-Monitor/Code/cargo_ruf_virtual/ruf_audit_virtual/virt_work";
+    const WORKSPACE_PATH: &str = "/home/ubuntu/Workspaces/Cargo-Ecosystem-Monitor/Code/cargo_ruf/ruf_audit_virtual/virt_work";
     /*
         TO TEST: get_cads_with_crate_name, get_reqs_with_version_id, first_resolve, update_resolve, extract_rufs_from_current_resolve
     */

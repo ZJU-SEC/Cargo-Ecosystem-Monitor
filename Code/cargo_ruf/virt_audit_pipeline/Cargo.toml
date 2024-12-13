@@ -1,0 +1,11 @@
+[package]
+name = "virt_audit_pipeline"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam = "0.8.4"
+log = "0.4.22"
+postgres = "0.19.9"
+simplelog = "0.12.2"
+ruf_audit_virtual = { path = "../ruf_audit_virtual" }

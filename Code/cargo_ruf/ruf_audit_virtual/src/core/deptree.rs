@@ -1,11 +1,10 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, io::Write};
 
 use cargo_lock::dependency::{
     graph::{EdgeDirection, Graph, NodeIndex},
     Tree,
 };
 use fxhash::FxHashMap;
-use log::debug;
 use petgraph::visit::EdgeRef;
 use semver::Version;
 
@@ -71,7 +70,11 @@ impl<D: DepOps> DepTreeManager<D> {
     }
 
     /// Get usable candidates of a node that match it's parents' version req, and free from rufs issues.
-    pub fn get_candidates(&self, pkgnx: NodeIndex) -> Result<Vec<Version>, AuditError> {
+    pub fn get_candidates(
+        &self,
+        pkgnx: NodeIndex,
+        debugger: &mut impl Write,
+    ) -> Result<Vec<Version>, AuditError> {
         let graph = self.get_graph();
         let dep = &graph[pkgnx];
         let dep_name = dep.name.to_string();
@@ -81,11 +84,7 @@ impl<D: DepOps> DepTreeManager<D> {
         assert!(parents.len() >= 1, "Fatal, root has no parents");
 
         let candidates = self.depops.get_all_candidates(&dep_name)?;
-
-        if candidates.is_empty() {
-            // FIXME: This shall be another kinds of issues.
-            unimplemented!("Empty candidates found.");
-        }
+        assert!(!candidates.is_empty());
 
         // Collect parents' version req on current package.
         let mut version_reqs = Vec::new();
@@ -99,6 +98,13 @@ impl<D: DepOps> DepTreeManager<D> {
                 .remove(&dep_name)
                 .expect("Fatal, cannot find dependency in parent package");
             // prepare for relaxing strict parents.
+
+            writeln!(
+                debugger,
+                "[Deptree Debug] get_candidates: check {}@{} with parent {}@{} req: {}",
+                dep_name, dep_ver, p_name, p_ver, req
+            ).unwrap();
+
             let lowest = candidates
                 .keys()
                 .filter(|key| req.matches(key))
@@ -133,12 +139,17 @@ impl<D: DepOps> DepTreeManager<D> {
             let rufs = self
                 .depops
                 .resolve_condrufs(&dep_name, &dep_ver, condrufs)?;
-            println!(
-                "[Deptree Debug] get_candidates: check version {} with rufs: {:?}",
-                ver, rufs
-            );
 
-            if self.depops.check_rufs(self.rustv, &rufs) {
+            let issue_rufs = self.depops.filter_issue_rufs(self.rustv, rufs.clone());
+
+            writeln!(
+                debugger,
+                "[Deptree Debug] get_candidates: check req-matched version {} with rufs: {:?}, issue: {:?}",
+                ver, rufs, issue_rufs
+            )
+            .unwrap();
+
+            if issue_rufs.is_empty() {
                 usable.push(ver);
             }
         }
@@ -152,6 +163,7 @@ impl<D: DepOps> DepTreeManager<D> {
         &self,
         parent_pkgnx: NodeIndex,
         dep_pkgnx: NodeIndex,
+        debugger: &mut impl Write,
     ) -> Result<Vec<Version>, AuditError> {
         let graph = self.get_graph();
 
@@ -162,7 +174,7 @@ impl<D: DepOps> DepTreeManager<D> {
         let dep_pkg = &graph[dep_pkgnx];
         let dep_name = dep_pkg.name.as_str();
 
-        let parent_candidates = self.get_candidates(parent_pkgnx)?;
+        let parent_candidates = self.get_candidates(parent_pkgnx, debugger)?;
 
         // Find out parent version with older version req to dep package.
         let cur_req = self
@@ -177,12 +189,14 @@ impl<D: DepOps> DepTreeManager<D> {
                 .depops
                 .get_pkg_versionreq(parent_name, cad.to_string().as_str())?;
 
-            println!(
+            writeln!(
+                debugger,
                 "[Deptree Debug] get_upfix_candidates: check version {} cur_req: {}, new_req: {:?}",
                 cad,
                 cur_req,
                 reqs.get(dep_name).map(|req| req.to_string())
-            );
+            )
+            .unwrap();
 
             if let Some(req) = reqs.remove(dep_name) {
                 // We take the assumption that, older verison shall have looser semver req,
@@ -206,7 +220,10 @@ impl<D: DepOps> DepTreeManager<D> {
         prev_ver: &str,
         new_ver: &str,
     ) -> Result<(), AuditError> {
-        self.depops.update_pkg(name, prev_ver, new_ver)
+        self.depops.update_pkg(name, prev_ver, new_ver)?;
+        self.deptree = self.depops.get_deptree()?;
+        self.limit_by.borrow_mut().clear();
+        Ok(())
     }
 
     /// Get the parents of a node in the dependency tree.

@@ -29,6 +29,8 @@ pub trait DepOps {
     ) -> Result<Vec<String>, AuditError>;
     /// Check if the rufs are usable.
     fn check_rufs(&self, rustv: u32, rufs: &Vec<String>) -> bool;
+    /// Similar to the above, but return the failed rufs.
+    fn filter_issue_rufs(&self, rustv: u32, rufs: Vec<String>) -> Vec<String>;
 
     /// Update current dependency tree.
     fn update_pkg(&mut self, name: &str, prev_ver: &str, new_ver: &str) -> Result<(), AuditError>;
