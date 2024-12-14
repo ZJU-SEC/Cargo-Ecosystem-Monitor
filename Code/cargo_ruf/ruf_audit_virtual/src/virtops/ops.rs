@@ -207,8 +207,8 @@ impl DepOpsVirt {
                 .map_err(|e| format!("VersionReq parse failure, invalid req: {} {}", req, e))?;
 
             // FIXME: Shall we ignore the optional, target, etc on the dependencies ?
-            let check_dup = dep_reqs.insert(name, req);
-            assert!(check_dup.is_none());
+            let check_dup = dep_reqs.insert(name.clone(), req);
+            assert!(check_dup.is_none(), "{name}: {check_dup:?}");
         }
 
         Ok(dep_reqs)
@@ -419,7 +419,6 @@ impl DepOpsVirt {
         let resolve = self.resolve.as_ref().unwrap();
 
         for pkg_id in resolve.iter() {
-            // FIXME: Do we get the used pf correctly or not ?
             let pkg_features = resolve.features(pkg_id);
             let pkg_rufs = self.extract_rufs_from_one_pkg(
                 &pkg_id.name().as_str(),
@@ -532,7 +531,6 @@ impl DepOps for DepOpsVirt {
             .query(&format!("{}@{}", name, ver))
             .map_err(|e| AuditError::InnerError(e.to_string()))?;
 
-        // FIXME: Do we get the correct pkg_features ?
         let pkg_features = resolve.features(pkg_id);
 
         for condruf in condrufs.inner() {

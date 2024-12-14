@@ -32,7 +32,9 @@ fn check_fix(
 
         // We do bfs and thus fix problems up to down.
         let graph = deptree.get_graph();
-        let root = deptree.get_root();
+        // In virt audit, real root is the child of `root`.
+        let root = graph.neighbors(deptree.get_root()).next().unwrap();
+
         let mut issue_dep = None;
 
         // Check rufs topdonw.
@@ -43,7 +45,7 @@ fn check_fix(
             if let Some(rufs) = used_rufs.get(&name_ver) {
                 writeln!(
                     debugger,
-                    "[VirtAudit Debug] check_fix: checking {}@{} rufs: {:?}",
+                    "[VirtAudit Debug] check_fix: checking ruf enabled package {}@{} rufs: {:?}",
                     node.name, node.version, rufs
                 )
                 .unwrap();
@@ -104,8 +106,17 @@ fn check_fix(
 
             // Ok, we loop back and check rufs again.
         } else {
+            let dep_name = issue_dep.name.to_string();
             // Or we have to do an up fix.
-            upfix(&mut deptree, issue_depnx, debugger)?;
+            upfix(&mut deptree, issue_depnx, debugger).map_err(|e| {
+                match e {
+                    AuditError::FunctionError(msg, _) => {
+                        // Record which dep caused the error.
+                        AuditError::FunctionError(msg, Some(dep_name))
+                    }
+                    _ => e,
+                }
+            })?;
         }
     }
 
@@ -117,23 +128,21 @@ fn upfix(
     issue_depnx: NodeIndex,
     debugger: &mut impl Write,
 ) -> Result<(), AuditError> {
-    // So who restrict our issue dep ?
-    let strict_parent_pkgnx = match deptree.get_limit_by(issue_depnx) {
-        Some(p) => p,
-        None => {
-            return Err(AuditError::FunctionError(
-                "Up fix failed, no strict parent found".to_string(),
-            ))
-        }
-    };
+    let graph = deptree.get_graph();
 
-    if strict_parent_pkgnx == deptree.get_root() {
+    // So who restrict our issue dep ?
+    let strict_parent_pkgnx = deptree
+        .get_limit_by(issue_depnx)
+        .expect("Fatal, no strict parent found");
+
+    let root = graph.neighbors(deptree.get_root()).next().unwrap();
+    if strict_parent_pkgnx == root {
         return Err(AuditError::FunctionError(
             "Up fix failed, root reached".to_string(),
+            None,
         ));
     }
 
-    let graph = deptree.get_graph();
     let parent_pkg = &graph[strict_parent_pkgnx];
 
     writeln!(
@@ -189,8 +198,9 @@ fn test_audit() {
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let mut buffer = stdout.lock().unwrap();
 
-    // let (output, res) = audit("taxonomy", "0.3.1", WORKSPACE_PATH); // It cannot be fixed.
-    // let (_output, res) = audit("tar", "0.3.1", WORKSPACE_PATH);
-    let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
+    // let res = audit("taxonomy", "0.3.1", WORKSPACE_PATH, &mut *buffer);
+    // let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
+    let res = audit("riven", "1.15.0", WORKSPACE_PATH, &mut *buffer);
+
     println!("RESULTS: {:?}", res);
 }

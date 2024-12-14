@@ -22,16 +22,3 @@ pub fn get_ruf_status(ruf_name: &str, rustc_ver: u32) -> RufStatus {
 
     RufStatus::Unknown
 }
-
-pub fn get_ruf_all_status(ruf_name: &str) -> Vec<RufStatus> {
-    if let Some(ruf_lifetime) = RUF_LIFETIME.get(ruf_name) {
-        let mut res = Vec::with_capacity(RUSTC_VER_NUM);
-        for i in 0..RUSTC_VER_NUM {
-            res.push(RufStatus::from(ruf_lifetime[i] as u32));
-        }
-
-        return res;
-    }
-
-    vec![]
-}
