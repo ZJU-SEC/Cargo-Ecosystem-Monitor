@@ -1,5 +1,5 @@
 /*
-    DB Settins:
+    Sample DB Settins:
 
     CREATE TABLE indirect_impact AS (
     SELECT version_from as id, status
@@ -18,6 +18,7 @@
 
 use std::{
     env::current_dir,
+    fs::File,
     panic,
     sync::{Arc, Mutex},
     thread,
@@ -27,7 +28,7 @@ use crossbeam::channel;
 use log::{error, info};
 use postgres::{Client, NoTls};
 
-use ruf_audit_virtual::audit;
+use ruf_audit_virtual::{audit, AuditError};
 
 pub struct VersionInfo {
     pub version_id: i32,
@@ -72,7 +73,11 @@ pub fn run_audit_virt(workers: usize, status: &str) {
             let workspace_str = workspace.to_str().unwrap();
 
             if !workspace.exists() {
-                std::fs::create_dir_all(workspace_str).unwrap();
+                let tmp_dir = workspace.join("src");
+                std::fs::create_dir_all(&tmp_dir).unwrap();
+
+                let tmp_file = tmp_dir.join("lib.rs");
+                File::create(&tmp_file).unwrap();
             }
 
             while let Ok(versions) = rx.recv() {
@@ -100,8 +105,9 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                         Arc::clone(&conn),
                                         version.version_id,
                                         "success",
-                                        "",
-                                        &output.as_str(),
+                                        None,
+                                        None,
+                                        Some(&output),
                                     );
                                     update_process_status(
                                         Arc::clone(&conn),
@@ -110,17 +116,21 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                     );
                                 }
                                 Err(e) => {
-                                    let status = if e.is_inner() {
-                                        "inner fail"
-                                    } else {
-                                        "fix fail"
+                                    let (status, issue_dep, error) = match e {
+                                        AuditError::InnerError(error) => {
+                                            ("inner fail", None, error)
+                                        }
+                                        AuditError::FunctionError(error, issue_dep) => {
+                                            ("fix fail", issue_dep, error)
+                                        }
                                     };
                                     store_audit_results(
                                         Arc::clone(&conn),
                                         version.version_id,
                                         status,
-                                        &e.into_msg(),
-                                        &output,
+                                        issue_dep.as_ref().map(|s| s.as_str()),
+                                        Some(&error),
+                                        Some(&output),
                                     );
                                     update_process_status(
                                         Arc::clone(&conn),
@@ -136,8 +146,9 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                 Arc::clone(&conn),
                                 version.version_id,
                                 "panic",
-                                format!("{:?}", e).as_str(),
-                                "",
+                                None,
+                                Some(format!("{:?}", e).as_str()),
+                                None,
                             );
                             update_process_status(Arc::clone(&conn), version.version_id, "panic");
                         }
@@ -206,6 +217,7 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
                     version_id INT PRIMARY KEY,
                     result VARCHAR,
                     error  VARCHAR,
+                    issue_dep VARCHAR,
                     output TEXT
                 )"#
             ),
@@ -226,16 +238,16 @@ fn store_audit_results(
     conn: Arc<Mutex<Client>>,
     version_id: i32,
     result: &str,
-    error: &str,
-    output: &str,
+    issue_dep: Option<&str>,
+    error: Option<&str>,
+    output: Option<&str>,
 ) {
     conn.lock()
-        .unwrap()
-        .query(
-            "INSERT INTO virt_audit_results(version_id, result, error, output) VALUES($1, $2, $3, $4)",
-            &[&version_id, &result, &error, &output],
-        )
-        .expect("cannot store audit results");
+    .unwrap()
+    .query(
+        "INSERT INTO virt_audit_results(version_id, result, error, issue_dep, output) VALUES($1, $2, $3, $4, $5)",
+        &[&version_id, &result, &error, &issue_dep, &output],
+    ).unwrap();
 }
 
 fn update_process_status(conn: Arc<Mutex<Client>>, version_id: i32, status: &str) {

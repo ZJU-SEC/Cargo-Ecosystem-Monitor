@@ -32,7 +32,7 @@ lazy_static::lazy_static! {
     UPDATE version_feature SET conds = NULL WHERE conds = ''
 
     -- Currently we HAVE NOT created this table --
-    CREATE VIEW version_ruf AS
+    CREATE TABLE version_ruf AS
     SELECT versions_with_name.id, versions_with_name.name, versions_with_name.num, versions_with_name.crate_id, version_feature.conds, version_feature.feature
     FROM versions_with_name
     JOIN version_feature

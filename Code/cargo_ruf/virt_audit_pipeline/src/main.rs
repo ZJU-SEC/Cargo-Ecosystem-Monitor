@@ -25,5 +25,5 @@ fn main() {
     ])
     .unwrap();
 
-    utils::run_audit_virt(2, "undone");
+    utils::run_audit_virt(1, "undone");
 }
