@@ -7,7 +7,7 @@
     INNER JOIN feature_status ON name=nightly_feature )
 
     CREATE TABLE virt_audit_process AS (
-    SELECT DISTINCT(id), 'undone' as status
+    SELECT DISTINCT(ver) as id, 'undone' as status
     FROM (
         SELECT *
         FROM indirect_impact TABLESAMPLE SYSTEM (10) -- 10% Random Sampling

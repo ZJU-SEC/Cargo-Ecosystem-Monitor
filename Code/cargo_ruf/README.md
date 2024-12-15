@@ -30,7 +30,7 @@ Preparations ahead of running:
     - virt_audit_pipeline: This pipeline will run `ruf_audit_virtual` in all crates with ruf issues, as detected before. A process table shall be created before running the pipeline, here is an example:
         ```sql
         CREATE TABLE virt_audit_process AS (
-        SELECT DISTINCT(id), 'undone' as status
+        SELECT DISTINCT(ver) as id, 'undone' as status
         FROM tmp_ruf_impact
         WHERE status = 'removed' OR status = 'unknown')
         ```
