@@ -5,35 +5,36 @@
 
 
 1. Change `registry` path in `./.cargo/config.toml` to absolute path to your `crates.io-index`. It should be in the root directory of `Cargo-Ecosystem-Monitor`. If you are using our dockerfile for replication, the default `config.toml` file has been set to the right value. You can ignore this step.
+   
+   ```toml
+   [net]
+   git-fetch-with-cli = true
 
-```
-[net]
-git-fetch-with-cli = true
+   [source.mirror]
+   registry = "file:///absolute/path/to/crates.io-index/dir"
 
-[source.mirror]
-registry = "file:///absolute/path/to/crates.io-index/dir"
-
-[source.crates-io]
-replace-with = "mirror"
-```
+   [source.crates-io]
+   replace-with = "mirror"
+   ```
 
 
 2. Run `cargo run`!
+   
+   It's OK if you cancel the running process. You can run it again. You won't lost results we have generated. The resolution process will continue.
 
-It's OK if you cancel the running process. You can run it again. You won't lost results we have generated. The resolution process will continue.
+   Be sure that you have correctly set up your database according to our guide in the project root directory. Moreover, if you can't connect to the database, there might be sth wrong with the connection, including port(sometimes 5432, and sometimes 5434) and else.
 
-Be sure that you have correctly set up your database according to our guide in the project root directory. Moreover, if you can't connect to the database, there might be sth wrong with the connection, including port(sometimes 5432, and sometimes 5434) and else.
 
 If you have changed the registry or other ecosystem metadata, you should clear related cache info. In the replication process, this will not happen.
 
 
-1. Clear your Cache
+1. Clear your cache.
+   
+   If you have run this tool, there will be multiple `dep*.toml` file and `job*`  directory, you should delete them all before you start your process.
 
-If you have run this tool, there will be multiple `dep*.toml` file and `job*`  directory, you should delete them all before you start your process.
-
-2. Clear your built tables
-
-If you have run this tool, there will be extra tables in DB which are old. You should drop all these tables.
+2. Clear your built tables.
+   
+   If you have run this tool, there will be extra tables in DB which are old. You should drop all these tables.
 
 
 ### Architecture
