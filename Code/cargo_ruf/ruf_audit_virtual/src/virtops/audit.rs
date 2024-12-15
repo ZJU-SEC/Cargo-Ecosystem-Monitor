@@ -76,6 +76,14 @@ fn check_fix(
         )
         .unwrap();
 
+        // Make sure it's not the root, or we cannot fix.
+        if issue_depnx == root {
+            return Err(AuditError::FunctionError(
+                "Down fix fail, root has issue".to_string(),
+                None,
+            ));
+        }
+
         // Canditate versions, filtered by semver reqs and ruf issues.
         let candidate_vers = deptree.get_candidates(issue_depnx, debugger)?;
         writeln!(
@@ -198,9 +206,9 @@ fn test_audit() {
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let mut buffer = stdout.lock().unwrap();
 
-    // let res = audit("taxonomy", "0.3.1", WORKSPACE_PATH, &mut *buffer);
+    let res = audit("taxonomy", "0.3.1", WORKSPACE_PATH, &mut *buffer);
     // let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
-    let res = audit("riven", "1.15.0", WORKSPACE_PATH, &mut *buffer);
+    // let res = audit("stainless", "0.0.1", WORKSPACE_PATH, &mut *buffer);
 
     println!("RESULTS: {:?}", res);
 }
