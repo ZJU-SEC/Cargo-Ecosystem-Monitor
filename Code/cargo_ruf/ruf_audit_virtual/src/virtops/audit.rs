@@ -80,7 +80,7 @@ fn check_fix(
         if issue_depnx == root {
             return Err(AuditError::FunctionError(
                 "Down fix fail, root has issue".to_string(),
-                None,
+                Some(issue_dep.name.to_string()),
             ));
         }
 
@@ -206,9 +206,9 @@ fn test_audit() {
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let mut buffer = stdout.lock().unwrap();
 
-    let res = audit("taxonomy", "0.3.1", WORKSPACE_PATH, &mut *buffer);
+    // let res = audit("taxonomy", "0.3.1", WORKSPACE_PATH, &mut *buffer);
     // let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
-    // let res = audit("stainless", "0.0.1", WORKSPACE_PATH, &mut *buffer);
+    let res: Result<(), AuditError> = audit("interleave", "1.0.1", WORKSPACE_PATH, &mut *buffer);
 
     println!("RESULTS: {:?}", res);
 }

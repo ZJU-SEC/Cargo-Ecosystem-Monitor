@@ -194,7 +194,7 @@ impl DepOpsVirt {
             .lock()
             .unwrap()
             .query(
-                "SELECT crate_name, req FROM dependencies_with_name WHERE version_id = $1",
+                "SELECT crate_name, req, kind FROM dependencies_with_name WHERE version_id = $1",
                 &[&version_id],
             )
             .map_err(|e| e.to_string())?;
@@ -205,10 +205,13 @@ impl DepOpsVirt {
             let req = row.get::<_, String>(1);
             let req = VersionReq::parse(&req)
                 .map_err(|e| format!("VersionReq parse failure, invalid req: {} {}", req, e))?;
+            let kind = row.get::<_, i32>(2);
 
-            // FIXME: Shall we ignore the optional, target, etc on the dependencies ?
-            let check_dup = dep_reqs.insert(name.clone(), req);
-            assert!(check_dup.is_none(), "{name}: {check_dup:?}");
+            if kind != 2 {
+                // FIXME: Shall we ignore the optional, target, etc on the dependencies ?
+                let check_dup = dep_reqs.insert(name.clone(), req);
+                assert!(check_dup.is_none(), "duplicated version reqs on {name}");
+            } // We DONOT care the dev dependencies.
         }
 
         Ok(dep_reqs)

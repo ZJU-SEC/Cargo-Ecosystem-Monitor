@@ -141,6 +141,12 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                             }
                         }
                         Err(e) => {
+                            let e = if let Some(s) = e.downcast_ref::<String>() {
+                                s.as_str()
+                            } else {
+                                "Uncatched panic"
+                            };
+
                             error!("[{}] audit panic: {:?}", i, e);
                             store_audit_results(
                                 Arc::clone(&conn),
@@ -245,7 +251,8 @@ fn store_audit_results(
     conn.lock()
     .unwrap()
     .query(
-        "INSERT INTO virt_audit_results(version_id, result, error, issue_dep, output) VALUES($1, $2, $3, $4, $5)",
+        "INSERT INTO virt_audit_results(version_id, result, error, issue_dep, output) VALUES($1, $2, $3, $4, $5)
+        ON CONFLICT (version_id) DO UPDATE SET result = EXCLUDED.result, error = EXCLUDED.error, issue_dep = EXCLUDED.issue_dep, output = EXCLUDED.output",
         &[&version_id, &result, &error, &issue_dep, &output],
     ).unwrap();
 }
