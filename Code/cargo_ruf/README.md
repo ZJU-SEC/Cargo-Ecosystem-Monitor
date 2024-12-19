@@ -1,5 +1,3 @@
-FIXME: update this readme.
-
 # Ruf Audit
 
 This project aims at providing RUF audit tools to mitigate RUF impacts, including two crates:
@@ -58,5 +56,5 @@ ATTENTION:
     cgset -r memory.limit_in_bytes=32G rufAuditGroup # You can set memory limit according to your machine
     cgset -r cpu.cfs_quota_us=75000 rufAuditGroup 
     cgset -r cpu.cfs_period_us=100000 rufAuditGroup # Allows at most 75000 us running every 100000us, or max CPU usage at 75%.
-    cgexec -g memory,cpu:rufAuditGroup $your_command & # $your_command here should be `cargo run` under `audit_pipeline` directory.
+    cgexec -g memory,cpu:rufAuditGroup $your_command & # $your_command here should be `cargo run` under `virt_audit_pipeline` directory.
     ```
