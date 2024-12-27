@@ -13,11 +13,11 @@ use cargo::util::interning::InternedString;
 use cargo::{ops, GlobalContext};
 
 use cargo_lock::dependency::Tree;
-use cargo_lock::{Lockfile, Version};
+use cargo_lock::Lockfile;
 use fxhash::{FxHashMap, FxHashSet};
 use postgres::{Client, NoTls};
 use regex::Regex;
-use semver::VersionReq;
+use semver::{Version, VersionReq};
 
 use crate::basic::{self, CondRuf, CondRufs};
 use crate::core::AuditError;
@@ -62,10 +62,6 @@ pub struct DepOpsVirt {
 
     /// The local crates.
     locals: FxHashMap<String, FxHashMap<String, VersionReq>>,
-
-    /// For the resolve result.
-    resolve: Option<Resolve>,
-    lockfile: Option<Lockfile>,
 }
 
 impl DepOpsVirt {
@@ -89,7 +85,7 @@ impl DepOpsVirt {
         let registry_path = workspace_path.join("registry");
         let toml_path = workspace_path.join("Cargo.toml");
 
-        let mut uninit = Self {
+        let uninit = Self {
             conn: Mutex::new(client),
 
             name: name.to_string(),
@@ -100,14 +96,7 @@ impl DepOpsVirt {
             toml_path: toml_path,
 
             locals: locals,
-
-            resolve: None,
-            lockfile: None,
         };
-
-        uninit
-            .first_resolve()
-            .map_err(|e| AuditError::InnerError(e))?;
 
         Ok(uninit)
     }
@@ -218,7 +207,7 @@ impl DepOpsVirt {
     }
 
     /// For the inital resolve, called at [new] only once.
-    fn first_resolve(&mut self) -> Result<(), String> {
+    fn do_first_resolve(&self) -> Result<(Resolve, Tree), String> {
         let mut features = Vec::new();
 
         // Create virtual environment.
@@ -290,16 +279,18 @@ impl DepOpsVirt {
         // And here the resolve is finally usable.
         let lockfile = ops::resolve_to_string(&ws, &mut resolve).map_err(|e| e.to_string())?;
         let lockfile = Lockfile::from_str(&lockfile).map_err(|e| e.to_string())?;
+        let tree = lockfile.dependency_tree().map_err(|e| e.to_string())?;
 
-        // Updates the resolve and lockfile.
-        self.resolve = Some(resolve);
-        self.lockfile = Some(lockfile);
-
-        Ok(())
+        Ok((resolve, tree))
     }
 
-    fn update_resolve(&mut self, name: &str, prev_ver: &str, new_ver: &str) -> Result<(), String> {
-        let previous_resolve = self.resolve.as_ref().unwrap();
+    fn do_update_resolve(
+        &self,
+        prev_resolve: &Resolve,
+        name: &str,
+        prev_ver: &str,
+        new_ver: &str,
+    ) -> Result<(Resolve, Tree), String> {
         let name_ver = format!("{}@{}", name, prev_ver);
 
         let config = GlobalContext::new(
@@ -318,7 +309,7 @@ impl DepOpsVirt {
         let mut to_avoid = HashSet::new();
 
         let mut sources = Vec::new();
-        let dep = previous_resolve.query(&name_ver).unwrap();
+        let dep = prev_resolve.query(&name_ver).unwrap();
 
         to_avoid.insert(dep);
         sources.push({
@@ -329,7 +320,7 @@ impl DepOpsVirt {
         });
 
         if let Ok(unused_id) =
-            PackageIdSpec::query_str(&name_ver, previous_resolve.unused_patches().iter().cloned())
+            PackageIdSpec::query_str(&name_ver, prev_resolve.unused_patches().iter().cloned())
         {
             to_avoid.insert(unused_id);
         }
@@ -377,23 +368,18 @@ impl DepOpsVirt {
             &ws,
             &CliFeatures::new_all(true),
             HasDevUnits::No,
-            Some(&previous_resolve),
+            Some(&prev_resolve),
             Some(&keep),
             &[],
             true,
         )
         .map_err(|e| e.to_string())?;
 
-        // ops::print_lockfile_changes(&ws, Some(previous_resolve), &resolve, &mut registry).unwrap();
-
         let lockfile = ops::resolve_to_string(&ws, &mut resolve).map_err(|e| e.to_string())?;
         let lockfile = Lockfile::from_str(&lockfile).map_err(|e| e.to_string())?;
+        let tree = lockfile.dependency_tree().map_err(|e| e.to_string())?;
 
-        // Updates the resolve and lockfile.
-        self.resolve = Some(resolve);
-        self.lockfile = Some(lockfile);
-
-        Ok(())
+        Ok((resolve, tree))
     }
 
     fn format_virt_toml_file(&self, name: &str, ver: &str, features: &Vec<&str>) -> String {
@@ -417,9 +403,11 @@ impl DepOpsVirt {
         file
     }
 
-    fn extract_rufs_from_current_resolve(&self) -> Result<FxHashMap<String, Vec<String>>, String> {
+    fn extract_rufs_from_resolve(
+        &self,
+        resolve: &Resolve,
+    ) -> Result<FxHashMap<String, Vec<String>>, String> {
         let mut rufs = FxHashMap::default();
-        let resolve = self.resolve.as_ref().unwrap();
 
         for pkg_id in resolve.iter() {
             let pkg_features = resolve.features(pkg_id);
@@ -508,28 +496,23 @@ impl DepOps for DepOpsVirt {
             .map_err(|e| AuditError::InnerError(e))
     }
 
-    fn get_deptree(&self) -> Result<Tree, AuditError> {
-        self.lockfile
-            .as_ref()
-            .unwrap()
-            .dependency_tree()
-            .map_err(|e| AuditError::InnerError(e.to_string()))
-    }
-
-    fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError> {
-        self.extract_rufs_from_current_resolve()
+    fn extract_rufs(
+        &self,
+        resolve: &Resolve,
+    ) -> Result<FxHashMap<String, Vec<String>>, AuditError> {
+        self.extract_rufs_from_resolve(resolve)
             .map_err(|e| AuditError::InnerError(e))
     }
 
     fn resolve_condrufs(
         &self,
+        resolve: &Resolve,
         name: &str,
         ver: &str,
         condrufs: CondRufs,
     ) -> Result<Vec<String>, AuditError> {
         let mut rufs = FxHashSet::default();
 
-        let resolve = self.resolve.as_ref().unwrap();
         let pkg_id = resolve
             .query(&format!("{}@{}", name, ver))
             .map_err(|e| AuditError::InnerError(e.to_string()))?;
@@ -572,8 +555,19 @@ impl DepOps for DepOpsVirt {
             .collect()
     }
 
-    fn update_pkg(&mut self, name: &str, prev_ver: &str, new_ver: &str) -> Result<(), AuditError> {
-        self.update_resolve(name, prev_ver, new_ver)
+    fn first_resolve(&self) -> Result<(Resolve, Tree), AuditError> {
+        self.do_first_resolve()
+            .map_err(|e| AuditError::InnerError(e))
+    }
+
+    fn update_resolve(
+        &self,
+        prev_resolve: &Resolve,
+        name: &str,
+        prev_ver: &str,
+        new_ver: &str,
+    ) -> Result<(Resolve, Tree), AuditError> {
+        self.do_update_resolve(prev_resolve, name, prev_ver, new_ver)
             .map_err(|e| AuditError::InnerError(e))
     }
 }
@@ -585,7 +579,7 @@ fn test_DepOpsVirt() {
     /*
         TO TEST: get_cads_with_crate_name, get_reqs_with_version_id, first_resolve, update_resolve, extract_rufs_from_current_resolve
     */
-    let depops = DepOpsVirt::new("taxonomy", "0.3.1", WORKSPACE_PATH).unwrap();
+    // let depops = DepOpsVirt::new("taxonomy", "0.3.1", WORKSPACE_PATH).unwrap();
     // let depops = DepOpsVirt::new("sdl2-sys", "0.0.34", WORKSPACE_PATH).unwrap();
     // let depops = DepOpsVirt::new("libc", "0.2.129", WORKSPACE_PATH).unwrap();
     // let depops = DepOpsVirt::new("rich-sdl2-rust", "0.11.2", WORKSPACE_PATH).unwrap();
@@ -611,9 +605,9 @@ fn test_DepOpsVirt() {
     //     )
     // }
 
-    let res = depops.extract_rufs_from_current_resolve().unwrap();
-    for (pkg, rufs) in res {
-        let usable = depops.check_rufs(63, &rufs);
-        println!("{} rufs: {:#?} [usable: {}]", pkg, rufs, usable);
-    }
+    // let res = depops.extract_rufs_from_current_resolve().unwrap();
+    // for (pkg, rufs) in res {
+    //     let usable = depops.check_rufs(63, &rufs);
+    //     println!("{} rufs: {:#?} [usable: {}]", pkg, rufs, usable);
+    // }
 }

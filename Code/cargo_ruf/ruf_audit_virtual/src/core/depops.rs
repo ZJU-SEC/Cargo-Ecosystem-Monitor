@@ -1,3 +1,4 @@
+use cargo::core::Resolve;
 use cargo_lock::{dependency::Tree, Version};
 use fxhash::FxHashMap;
 use semver::VersionReq;
@@ -15,14 +16,13 @@ pub trait DepOps {
         ver: &str,
     ) -> Result<FxHashMap<String, VersionReq>, AuditError>;
 
-    /// Get the dependency tree of current package.
-    fn get_deptree(&self) -> Result<Tree, AuditError>;
-
     /// Extract the rufs from the dependency tree.
-    fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError>;
+    fn extract_rufs(&self, resolve: &Resolve)
+        -> Result<FxHashMap<String, Vec<String>>, AuditError>;
     /// Resolve the condrufs to rufs based on current dependency tree.
     fn resolve_condrufs(
         &self,
+        resolve: &Resolve,
         name: &str,
         ver: &str,
         condrufs: CondRufs,
@@ -32,6 +32,14 @@ pub trait DepOps {
     /// Similar to the above, but return the failed rufs.
     fn filter_issue_rufs(&self, rustv: u32, rufs: Vec<String>) -> Vec<String>;
 
-    /// Update current dependency tree.
-    fn update_pkg(&mut self, name: &str, prev_ver: &str, new_ver: &str) -> Result<(), AuditError>;
+    /// First time resolve
+    fn first_resolve(&self) -> Result<(Resolve, Tree), AuditError>;
+    /// Update resolve accordingsly
+    fn update_resolve(
+        &self,
+        prev_resolve: &Resolve,
+        name: &str,
+        prev_ver: &str,
+        new_ver: &str,
+    ) -> Result<(Resolve, Tree), AuditError>;
 }

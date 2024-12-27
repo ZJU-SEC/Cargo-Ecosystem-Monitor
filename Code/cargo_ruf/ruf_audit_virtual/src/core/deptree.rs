@@ -1,5 +1,6 @@
 use std::{cell::RefCell, io::Write};
 
+use cargo::{core::Resolve, ops};
 use cargo_lock::dependency::{
     graph::{EdgeDirection, Graph, NodeIndex},
     Tree,
@@ -8,7 +9,10 @@ use fxhash::FxHashMap;
 use petgraph::visit::EdgeRef;
 use semver::Version;
 
-use crate::core::{depops::DepOps, error::AuditError};
+use crate::{
+    basic::RUSTC_VER_NUM,
+    core::{depops::DepOps, error::AuditError},
+};
 
 /// Record and manage the dependency tree of a crate
 pub struct DepTreeManager<D: DepOps> {
@@ -17,30 +21,39 @@ pub struct DepTreeManager<D: DepOps> {
 
     /// Depencency operators
     depops: D,
+    ///Dependency resolve
+    depresolve: Resolve,
     /// Dependency tree
     deptree: Tree,
 
-    /// Limit by lists
-    limit_by: RefCell<FxHashMap<NodeIndex, NodeIndex>>,
+    /// Dependency limited-by lists, for upfix
+    dep_limit_by: RefCell<FxHashMap<NodeIndex, NodeIndex>>,
+    /// Triable rustc versions
+    rustc_matrix: RefCell<[bool; RUSTC_VER_NUM]>,
+    /// Fixing mid-result records
+    fix_stacks: RefCell<Vec<(Resolve, [bool; RUSTC_VER_NUM])>>,
 }
 
 impl<D: DepOps> DepTreeManager<D> {
     /// Create new DepTreeManager from current configurations.
     pub fn new(ops: D, rustv: u32) -> Result<Self, AuditError> {
-        let deptree = ops.get_deptree()?;
+        let (depresolve, deptree) = ops.first_resolve()?;
 
         Ok(Self {
             rustv: rustv,
 
             depops: ops,
+            depresolve: depresolve,
             deptree: deptree,
 
-            limit_by: RefCell::new(FxHashMap::default()),
+            dep_limit_by: RefCell::new(FxHashMap::default()),
+            rustc_matrix: RefCell::new([true; RUSTC_VER_NUM]),
+            fix_stacks: RefCell::new(Vec::new()),
         })
     }
 
     pub fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError> {
-        self.depops.extract_rufs()
+        self.depops.extract_rufs(&self.depresolve)
     }
 
     pub fn check_rufs(&self, rufs: &Vec<String>) -> bool {
@@ -65,8 +78,8 @@ impl<D: DepOps> DepTreeManager<D> {
         roots[0]
     }
 
-    pub fn get_limit_by(&self, pkgnx: NodeIndex) -> Option<NodeIndex> {
-        self.limit_by.borrow().get(&pkgnx).cloned()
+    pub fn get_dep_limit_by(&self, pkgnx: NodeIndex) -> Option<NodeIndex> {
+        self.dep_limit_by.borrow().get(&pkgnx).cloned()
     }
 
     /// Get usable candidates of a node that match it's parents' version req, and free from rufs issues.
@@ -103,7 +116,8 @@ impl<D: DepOps> DepTreeManager<D> {
                 debugger,
                 "[Deptree Debug] get_candidates: check {}@{} with parent {}@{} req: {}",
                 dep_name, dep_ver, p_name, p_ver, req
-            ).unwrap();
+            )
+            .unwrap();
 
             let lowest = candidates
                 .keys()
@@ -125,7 +139,9 @@ impl<D: DepOps> DepTreeManager<D> {
 
         // FIXME: the limit design shall change.
         // multi strict parents? or have to remove versionreq rarther than loose it.
-        self.limit_by.borrow_mut().insert(pkgnx, strict_parent.0);
+        self.dep_limit_by
+            .borrow_mut()
+            .insert(pkgnx, strict_parent.0);
 
         // we choose candidates as:
         // 1. match its dependents' version req
@@ -136,9 +152,9 @@ impl<D: DepOps> DepTreeManager<D> {
         for (ver, condrufs) in candidates.into_iter().filter(|(ver, _)| {
             version_reqs.iter().all(|(_, req, _)| req.matches(ver)) && ver < &dep.version
         }) {
-            let rufs = self
-                .depops
-                .resolve_condrufs(&dep_name, &dep_ver, condrufs)?;
+            let rufs =
+                self.depops
+                    .resolve_condrufs(&self.depresolve, &dep_name, &dep_ver, condrufs)?;
 
             let issue_rufs = self.depops.filter_issue_rufs(self.rustv, rufs.clone());
 
@@ -220,9 +236,14 @@ impl<D: DepOps> DepTreeManager<D> {
         prev_ver: &str,
         new_ver: &str,
     ) -> Result<(), AuditError> {
-        self.depops.update_pkg(name, prev_ver, new_ver)?;
-        self.deptree = self.depops.get_deptree()?;
-        self.limit_by.borrow_mut().clear();
+        // FIXME: now we got to update the updates methods.
+        let (new_resolve, new_tree) =
+            self.depops
+                .update_resolve(&self.depresolve, name, prev_ver, new_ver)?;
+
+        self.depresolve = new_resolve;
+        self.deptree = new_tree;
+        self.dep_limit_by.borrow_mut().clear();
         Ok(())
     }
 

@@ -207,8 +207,8 @@ fn test_audit() {
     let mut buffer = stdout.lock().unwrap();
 
     // let res = audit("taxonomy", "0.3.1", WORKSPACE_PATH, &mut *buffer);
-    let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
-    // let res: Result<(), AuditError> = audit("byte-enum-derive", "0.1.1", WORKSPACE_PATH, &mut *buffer);
+    // let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
+    let res: Result<(), AuditError> = audit("byte-enum-derive", "0.1.1", WORKSPACE_PATH, &mut *buffer);
 
     println!("RESULTS: {:?}", res);
 }
