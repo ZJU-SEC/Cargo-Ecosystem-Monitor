@@ -575,7 +575,7 @@ impl DepOps for DepOpsVirt {
 #[test]
 #[allow(non_snake_case)]
 fn test_DepOpsVirt() {
-    const WORKSPACE_PATH: &str = "/home/ubuntu/Workspaces/Cargo-Ecosystem-Monitor/Code/cargo_ruf/ruf_audit_virtual/virt_work";
+    const _WORKSPACE_PATH: &str = "/home/ubuntu/Workspaces/Cargo-Ecosystem-Monitor/Code/cargo_ruf/ruf_audit_virtual/virt_work";
     /*
         TO TEST: get_cads_with_crate_name, get_reqs_with_version_id, first_resolve, update_resolve, extract_rufs_from_current_resolve
     */

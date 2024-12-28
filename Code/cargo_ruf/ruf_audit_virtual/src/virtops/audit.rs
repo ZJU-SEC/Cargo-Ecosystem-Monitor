@@ -18,12 +18,22 @@ pub fn audit(
     let ops = DepOpsVirt::new(name, ver, workspace)?;
     let deptree = DepTreeManager::new(ops, 63)?;
 
-    // Check if the rufs are usable and try fix if not.
+    // Check issues and fix them.
     check_fix(deptree, debugger)
 }
 
 fn check_fix(
     mut deptree: DepTreeManager<DepOpsVirt>,
+    debugger: &mut impl Write,
+) -> Result<(), AuditError> {
+    let _ = deptree_fix(&mut deptree, debugger);
+    let _ = deptree.update_rustc();
+
+    unimplemented!()
+}
+
+fn deptree_fix(
+    deptree: &mut DepTreeManager<DepOpsVirt>,
     debugger: &mut impl Write,
 ) -> Result<(), AuditError> {
     loop {
@@ -45,7 +55,7 @@ fn check_fix(
             if let Some(rufs) = used_rufs.get(&name_ver) {
                 writeln!(
                     debugger,
-                    "[VirtAudit Debug] check_fix: checking ruf enabled package {}@{} rufs: {:?}",
+                    "[VirtAudit Debug] deptree_fix: Checking ruf enabled package {}@{} rufs: {:?}",
                     node.name, node.version, rufs
                 )
                 .unwrap();
@@ -61,25 +71,25 @@ fn check_fix(
             // No rufs issue found (but other problem may exists).
             writeln!(
                 debugger,
-                "[VirtAudit Debug] check_fix: No rufs issue found, OK!"
+                "[VirtAudit Debug] deptree_fix: No rufs issue found, OK!"
             )
             .unwrap();
             return Ok(());
         }
 
-        // Or we try to fix it.
+        // Or we try to fix it, and here [`down fix`] first.
         let (issue_depnx, issue_dep) = issue_dep.unwrap();
         writeln!(
             debugger,
-            "[VirtAudit Debug] check_fix: Found issue dep: {}@{}",
+            "[VirtAudit Debug] deptree_fix: Found issue dep: {}@{}",
             issue_dep.name, issue_dep.version
         )
         .unwrap();
 
-        // FIXME: If root, means local ruf issues, thus we must switch the rustc first.
+        // If root, means local ruf issues, thus we must switch the rustc first.
         if issue_depnx == root {
             return Err(AuditError::FunctionError(
-                "Down fix fail, root has issue".to_string(),
+                "Downfix failed, root reached".to_string(),
                 Some(issue_dep.name.to_string()),
             ));
         }
@@ -88,7 +98,7 @@ fn check_fix(
         let candidate_vers = deptree.get_candidates(issue_depnx, debugger)?;
         writeln!(
             debugger,
-            "[VirtAudit Debug] check_fix: Found {} candidates: {:?}",
+            "[VirtAudit Debug] downfix: Found {} candidates: {:?}",
             candidate_vers.len(),
             candidate_vers
                 .iter()
@@ -106,7 +116,7 @@ fn check_fix(
 
             writeln!(
                 debugger,
-                "[VirtAudit Debug] check_fix: Try fixing issue dep {}@{} -> {}",
+                "[VirtAudit Debug] downfix: Switching pkg {}@{} -> {}",
                 dep_name, prev_ver, fix_ver
             )
             .unwrap();
@@ -116,7 +126,7 @@ fn check_fix(
         } else {
             let dep_name = issue_dep.name.to_string();
             // Or we have to do an up fix.
-            upfix(&mut deptree, issue_depnx, debugger).map_err(|e| {
+            upfix(deptree, issue_depnx, debugger).map_err(|e| {
                 match e {
                     AuditError::FunctionError(msg, _) => {
                         // Record which dep caused the error.
@@ -146,7 +156,7 @@ fn upfix(
     let root = graph.neighbors(deptree.get_root()).next().unwrap();
     if strict_parent_pkgnx == root {
         return Err(AuditError::FunctionError(
-            "Up fix failed, root reached".to_string(),
+            "Upfix failed, root reached".to_string(),
             None,
         ));
     }
@@ -183,7 +193,7 @@ fn upfix(
 
         writeln!(
             debugger,
-            "[VirtAudit Debug] upfix: Try fixing parent {}@{} -> {}",
+            "[VirtAudit Debug] upfix: Switching pkg {}@{} -> {}",
             parent_pkg.name, parent_pkg.version, fix
         )
         .unwrap();
