@@ -27,7 +27,59 @@ fn check_fix(
     debugger: &mut impl Write,
 ) -> Result<(), AuditError> {
     loop {
-        if let Err(e) = deptree_fix(&mut deptree, debugger) {
+        // Extract current used rufs.
+        let used_rufs = deptree.extract_rufs()?;
+
+        // We do bfs and thus fix problems up to down.
+        let graph = deptree.get_graph();
+        // In virt audit, real root is the child of `root`.
+        let root = graph.neighbors(deptree.get_root()).next().unwrap();
+
+        let mut issue_dep = None;
+
+        // Check rufs top-donw.
+        let mut bfs = visit::Bfs::new(&graph, root);
+        while let Some(nx) = bfs.next(&graph) {
+            let node = &graph[nx];
+            let name_ver = format!("{}@{}", node.name, node.version);
+            if let Some(rufs) = used_rufs.get(&name_ver) {
+                writeln!(
+                    debugger,
+                    "[VirtAudit Debug] check_fix: Checking ruf enabled package {}@{} rufs: {:?}",
+                    node.name, node.version, rufs
+                )
+                .unwrap();
+                if !deptree.check_rufs(rufs) {
+                    // Ok here we got issues
+                    issue_dep = Some((nx, node.name.to_string(), node.version.to_string()));
+                    break;
+                }
+            }
+        }
+
+        if issue_dep.is_none() {
+            // No rufs issue found (but other problem may exists).
+            writeln!(
+                debugger,
+                "[VirtAudit Debug] check_fix: No rufs issue found, OK!"
+            )
+            .unwrap();
+            return Ok(());
+        }
+
+        let issue_dep = issue_dep.unwrap();
+        let issue_name_ver = format!("{}@{}", issue_dep.1, issue_dep.2);
+
+        writeln!(
+            debugger,
+            "[VirtAudit Debug] check_fix: Found issue dep: {}",
+            issue_name_ver
+        )
+        .unwrap();
+
+        deptree.found_issue(&issue_name_ver);
+
+        if let Err(e) = deptree_fix(&mut deptree, debugger, root, issue_dep) {
             if e.is_inner() {
                 return Err(e);
             }
@@ -61,13 +113,6 @@ fn check_fix(
             } else {
                 return Err(e);
             }
-        } else {
-            writeln!(
-                debugger,
-                "[VirtAudit Debug] check_fix: No rufs issue found, OK!"
-            )
-            .unwrap();
-            return Ok(());
         }
     }
 
@@ -84,108 +129,63 @@ fn check_fix(
 fn deptree_fix(
     deptree: &mut DepTreeManager<DepOpsVirt>,
     debugger: &mut impl Write,
+    root: NodeIndex,
+    issue_dep: (NodeIndex, String, String),
 ) -> Result<(), AuditError> {
-    loop {
-        // Extract current used rufs.
-        let used_rufs = deptree.extract_rufs()?;
+    // Or we try to fix it, and here [`down fix`] first.
+    let (issue_depnx, issue_name, issue_ver) = issue_dep;
 
-        // We do bfs and thus fix problems up to down.
-        let graph = deptree.get_graph();
-        // In virt audit, real root is the child of `root`.
-        let root = graph.neighbors(deptree.get_root()).next().unwrap();
+    // Inform the issue and record it.
 
-        let mut issue_dep = None;
-
-        // Check rufs top-donw.
-        let mut bfs = visit::Bfs::new(&graph, root);
-        while let Some(nx) = bfs.next(&graph) {
-            let node = &graph[nx];
-            let name_ver = format!("{}@{}", node.name, node.version);
-            if let Some(rufs) = used_rufs.get(&name_ver) {
-                writeln!(
-                    debugger,
-                    "[VirtAudit Debug] deptree_fix: Checking ruf enabled package {}@{} rufs: {:?}",
-                    node.name, node.version, rufs
-                )
-                .unwrap();
-                if !deptree.check_rufs(rufs) {
-                    // Ok here we got issues
-                    issue_dep = Some((nx, node, name_ver));
-                    break;
-                }
-            }
-        }
-
-        if issue_dep.is_none() {
-            // No rufs issue found (but other problem may exists).
-            return Ok(());
-        }
-
-        // Or we try to fix it, and here [`down fix`] first.
-        let (issue_depnx, issue_dep, issue_name_ver) = issue_dep.unwrap();
-        writeln!(
-            debugger,
-            "[VirtAudit Debug] deptree_fix: Found issue dep: {}",
-            issue_name_ver
-        )
-        .unwrap();
-
-        // Inform the issue and record it.
-        deptree.found_issue(&issue_name_ver);
-
-        // If root, means local ruf issues, thus we must switch the rustc first.
-        if issue_depnx == root {
-            return Err(AuditError::FunctionError(
-                "Downfix failed, root reached".to_string(),
-                Some(issue_dep.name.to_string()),
-            ));
-        }
-
-        // Canditate versions, filtered by semver reqs and ruf issues.
-        let candidate_vers = deptree.get_candidates(issue_depnx, debugger)?;
-        writeln!(
-            debugger,
-            "[VirtAudit Debug] downfix: Found {} candidates: {:?}",
-            candidate_vers.len(),
-            candidate_vers
-                .iter()
-                .map(|v| v.to_string())
-                .collect::<Vec<String>>()
-        )
-        .unwrap();
-
-        // Let's say, we choose the max canditate and check whether this can fix the issues.
-        let choose = candidate_vers.into_iter().max();
-        if let Some(fix) = choose {
-            let dep_name = issue_dep.name.to_string();
-            let prev_ver = issue_dep.version.to_string();
-            let fix_ver = fix.to_string();
-
-            writeln!(
-                debugger,
-                "[VirtAudit Debug] downfix: Switching pkg {}@{} -> {}",
-                dep_name, prev_ver, fix_ver
-            )
-            .unwrap();
-            deptree.update_pkg(&dep_name, &prev_ver, &fix_ver)?;
-
-            // Ok, we loop back and check rufs again.
-        } else {
-            let dep_name = issue_dep.name.to_string();
-            // Or we have to do an up fix.
-            upfix(deptree, issue_depnx, debugger).map_err(|e| {
-                match e {
-                    AuditError::FunctionError(msg, _) => {
-                        // Record which dep caused the error.
-                        AuditError::FunctionError(msg, Some(dep_name))
-                    }
-                    _ => e,
-                }
-            })?;
-        }
+    // If root, means local ruf issues, thus we must switch the rustc first.
+    if issue_depnx == root {
+        return Err(AuditError::FunctionError(
+            "Downfix failed, root reached".to_string(),
+            Some(issue_name),
+        ));
     }
 
-    // Won't reach here, return during the loop.
+    // Canditate versions, filtered by semver reqs and ruf issues.
+    let candidate_vers = deptree.get_candidates(issue_depnx, debugger)?;
+    writeln!(
+        debugger,
+        "[VirtAudit Debug] downfix: Found {} candidates: {:?}",
+        candidate_vers.len(),
+        candidate_vers
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<String>>()
+    )
+    .unwrap();
+
+    // Let's say, we choose the max canditate and check whether this can fix the issues.
+    let choose = candidate_vers.into_iter().max();
+    if let Some(fix) = choose {
+        let fix_ver = fix.to_string();
+
+        writeln!(
+            debugger,
+            "[VirtAudit Debug] downfix: Switching pkg {}@{} -> {}",
+            issue_name, issue_ver, fix_ver
+        )
+        .unwrap();
+        deptree.update_pkg(&issue_name, &issue_ver, &fix_ver)?;
+
+        // Ok, we loop back and check rufs again.
+    } else {
+        // Or we have to do an up fix.
+        upfix(deptree, issue_depnx, debugger).map_err(|e| {
+            match e {
+                AuditError::FunctionError(msg, _) => {
+                    // Record which dep caused the error.
+                    AuditError::FunctionError(msg, Some(issue_name))
+                }
+                _ => e,
+            }
+        })?;
+    }
+
+    Ok(())
 }
 
 fn upfix(
