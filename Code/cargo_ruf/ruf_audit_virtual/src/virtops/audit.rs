@@ -26,10 +26,59 @@ fn check_fix(
     mut deptree: DepTreeManager<DepOpsVirt>,
     debugger: &mut impl Write,
 ) -> Result<(), AuditError> {
-    let _ = deptree_fix(&mut deptree, debugger);
-    let _ = deptree.update_rustc();
+    loop {
+        if let Err(e) = deptree_fix(&mut deptree, debugger) {
+            if e.is_inner() {
+                return Err(e);
+            }
+            // Or it's a fix failure, we do rustc switch.
+            writeln!(
+                debugger,
+                "[VirtAudit Debug] check_fix: Deptree fix failed, try rustc switch"
+            )
+            .unwrap();
+            let mut choose = None;
+            let mut max_rustv = None;
+            for (index, (_, matrix)) in deptree.get_issues().iter().enumerate() {
+                if let Some(rustv) = max_rustc_in_matrix(matrix) {
+                    if max_rustv.is_none() || rustv > max_rustv.unwrap() {
+                        max_rustv = Some(rustv);
+                        choose = Some(index);
+                    }
+                }
+            }
 
-    unimplemented!()
+            if let Some(rustv) = max_rustv {
+                writeln!(
+                    debugger,
+                    "[VirtAudit Debug] check_fix: Switching rustc {} -> {}",
+                    deptree.get_rustv(),
+                    rustv
+                )
+                .unwrap();
+
+                deptree.update_rustc(rustv as u32, choose.unwrap());
+            } else {
+                return Err(e);
+            }
+        } else {
+            writeln!(
+                debugger,
+                "[VirtAudit Debug] check_fix: No rufs issue found, OK!"
+            )
+            .unwrap();
+            return Ok(());
+        }
+    }
+
+    fn max_rustc_in_matrix(arr: &[bool; 64]) -> Option<usize> {
+        for i in (0..64).rev() {
+            if arr[i] {
+                return Some(i);
+            }
+        }
+        None
+    }
 }
 
 fn deptree_fix(
@@ -61,7 +110,7 @@ fn deptree_fix(
                 .unwrap();
                 if !deptree.check_rufs(rufs) {
                     // Ok here we got issues
-                    issue_dep = Some((nx, node));
+                    issue_dep = Some((nx, node, name_ver));
                     break;
                 }
             }
@@ -69,22 +118,20 @@ fn deptree_fix(
 
         if issue_dep.is_none() {
             // No rufs issue found (but other problem may exists).
-            writeln!(
-                debugger,
-                "[VirtAudit Debug] deptree_fix: No rufs issue found, OK!"
-            )
-            .unwrap();
             return Ok(());
         }
 
         // Or we try to fix it, and here [`down fix`] first.
-        let (issue_depnx, issue_dep) = issue_dep.unwrap();
+        let (issue_depnx, issue_dep, issue_name_ver) = issue_dep.unwrap();
         writeln!(
             debugger,
-            "[VirtAudit Debug] deptree_fix: Found issue dep: {}@{}",
-            issue_dep.name, issue_dep.version
+            "[VirtAudit Debug] deptree_fix: Found issue dep: {}",
+            issue_name_ver
         )
         .unwrap();
+
+        // Inform the issue and record it.
+        deptree.found_issue(&issue_name_ver);
 
         // If root, means local ruf issues, thus we must switch the rustc first.
         if issue_depnx == root {

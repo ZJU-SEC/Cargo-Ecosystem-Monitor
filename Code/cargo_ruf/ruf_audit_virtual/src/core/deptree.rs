@@ -10,9 +10,11 @@ use petgraph::visit::EdgeRef;
 use semver::Version;
 
 use crate::{
-    basic::RUSTC_VER_NUM,
+    basic::{get_all_ruf_status, RufStatus, RUSTC_VER_NUM},
     core::{depops::DepOps, error::AuditError},
 };
+
+pub type UsedRufs = FxHashMap<String, Vec<String>>;
 
 /// Record and manage the dependency tree of a crate
 pub struct DepTreeManager<D: DepOps> {
@@ -21,13 +23,13 @@ pub struct DepTreeManager<D: DepOps> {
 
     /// Depencency operators
     depops: D,
-    ///Dependency resolve
-    depresolve: Rc<(Resolve, Tree)>,
+    ///Dependency resolve related info
+    depresolve: Rc<(Resolve, Tree, UsedRufs)>,
 
     /// Dependency limited-by lists, for upfix
     dep_limit_by: RefCell<FxHashMap<NodeIndex, NodeIndex>>,
-    /// Fixing mid-result records, the last one is the current state.
-    fix_stacks: RefCell<Vec<(Rc<(Resolve, Tree)>, [bool; RUSTC_VER_NUM])>>,
+    /// Audit mid-result records
+    issue_stacks: RefCell<Vec<(Rc<(Resolve, Tree, UsedRufs)>, [bool; RUSTC_VER_NUM])>>,
 
     /// Triable rustc versions
     overall_rustc_matrix: RefCell<[bool; RUSTC_VER_NUM]>,
@@ -36,24 +38,24 @@ pub struct DepTreeManager<D: DepOps> {
 impl<D: DepOps> DepTreeManager<D> {
     /// Create new DepTreeManager from current configurations.
     pub fn new(ops: D, rustv: u32) -> Result<Self, AuditError> {
-        let resolve = Rc::new(ops.first_resolve()?);
-        let rustc_matrix = Self::resolve_rustc_matrix(rustv, &resolve.0)?;
+        let (resolve, tree) = ops.first_resolve()?;
+        let used_rufs = ops.extract_rufs(&resolve)?;
 
         Ok(Self {
             rustv: rustv,
 
             depops: ops,
-            depresolve: resolve.clone(),
+            depresolve: Rc::new((resolve, tree, used_rufs)),
 
             dep_limit_by: RefCell::new(FxHashMap::default()),
-            fix_stacks: RefCell::new(vec![(resolve, rustc_matrix)]),
+            issue_stacks: RefCell::new(Vec::new()),
 
             overall_rustc_matrix: RefCell::new([true; RUSTC_VER_NUM]),
         })
     }
 
-    pub fn extract_rufs(&self) -> Result<FxHashMap<String, Vec<String>>, AuditError> {
-        self.depops.extract_rufs(&self.depresolve.0)
+    pub fn extract_rufs(&self) -> Result<UsedRufs, AuditError> {
+        Ok(self.depresolve.2.clone())
     }
 
     pub fn check_rufs(&self, rufs: &Vec<String>) -> bool {
@@ -65,9 +67,13 @@ impl<D: DepOps> DepTreeManager<D> {
     }
 
     pub fn get_root(&self) -> NodeIndex {
-        let roots = self.fix_stacks.borrow().last().unwrap().0 .1.roots();
+        let roots = self.depresolve.1.roots();
         assert!(roots.len() == 1, "Fatal, multiple roots found");
         roots[0]
+    }
+
+    pub fn get_rustv(&self) -> u32 {
+        self.rustv
     }
 
     pub fn get_dep_limit_by(&self, pkgnx: NodeIndex) -> Option<NodeIndex> {
@@ -129,8 +135,6 @@ impl<D: DepOps> DepTreeManager<D> {
             .max_by_key(|&(_, _, v)| v)
             .expect("Fatal, no strict parent found");
 
-        // FIXME: the limit design shall change.
-        // multi strict parents? or have to remove versionreq rarther than loose it.
         self.dep_limit_by
             .borrow_mut()
             .insert(pkgnx, strict_parent.0);
@@ -221,7 +225,26 @@ impl<D: DepOps> DepTreeManager<D> {
         Ok(usable)
     }
 
-    /// Update a package in the dependency tree, old resolve tree will be backed up in the fix stack.
+    /// Found an issue, record it in the stacks for possible later usage.
+    pub fn found_issue(&self, issue_name_ver: &str) {
+        let used_ruf = self.depresolve.2.get(issue_name_ver).unwrap();
+        let rustc_matrix = self.resolve_rustc_matrix(used_ruf);
+
+        self.issue_stacks
+            .borrow_mut()
+            .push((self.depresolve.clone(), rustc_matrix));
+    }
+
+    /// When deptree fix failed, rustc switch is needed. To decide which rustc
+    /// to switch to, and which resolve we use to continue,
+    /// we need to check the issue stacks, and find the best rustc and resolve.
+    pub fn get_issues(
+        &self,
+    ) -> std::cell::Ref<Vec<(Rc<(Resolve, Tree, UsedRufs)>, [bool; RUSTC_VER_NUM])>> {
+        self.issue_stacks.borrow()
+    }
+
+    /// Update a package in the dependency tree.
     pub fn update_pkg(
         &mut self,
         name: &str,
@@ -231,24 +254,32 @@ impl<D: DepOps> DepTreeManager<D> {
         let (new_resolve, new_tree) =
             self.depops
                 .update_resolve(&self.depresolve.0, name, prev_ver, new_ver)?;
+        let used_rufs = self.depops.extract_rufs(&new_resolve)?;
 
-        let rustc_matrix = Self::resolve_rustc_matrix(self.rustv, &self.depresolve.0)?;
-        self.depresolve = Rc::new((new_resolve, new_tree));
-        self.fix_stacks
-            .borrow_mut()
-            .push((self.depresolve.clone(), rustc_matrix));
-
+        self.depresolve = Rc::new((new_resolve, new_tree, used_rufs));
         self.dep_limit_by.borrow_mut().clear();
+
         Ok(())
     }
 
-    /// Since we are rustc-oriented, we always wants newer rustc.
-    /// Thus during the rustc switch, we choose a highest triable rustc, and the corresponding resolve tree.
-    pub fn update_rustc(&mut self) -> Result<(), AuditError> {
-        for (resolve, matrix) in self.fix_stacks.take() {
-            println!("[DEBUG] {:?}", resolve.0.version());
+    /// Since we are rustc-oriented, we always wants newer rustc, and thus during the fix,
+    /// we will try deptree fix first with newer rustc, and do rustc switch when failure.
+    ///
+    /// During the switch, the continue point matters.
+    pub fn update_rustc(&mut self, rustv: u32, resolve_id: usize) {
+        self.rustv = rustv;
+        self.depresolve = self.issue_stacks.borrow()[resolve_id].0.clone();
+
+        // Updates the overall rustc matrix, record those impossible.
+        let mut overall_rustc_matrix = self.overall_rustc_matrix.borrow_mut();
+        for (_, matrix) in self.issue_stacks.borrow().iter() {
+            for i in 0..RUSTC_VER_NUM {
+                overall_rustc_matrix[i] |= matrix[i];
+            }
         }
-        unimplemented!()
+
+        self.issue_stacks.borrow_mut().clear();
+        self.dep_limit_by.borrow_mut().clear();
     }
 
     /// Get the parents of a node in the dependency tree.
@@ -261,11 +292,35 @@ impl<D: DepOps> DepTreeManager<D> {
             .collect()
     }
 
-    /// Resolve the usable rustc matrix for a given rustc version and resolve tree.
-    fn resolve_rustc_matrix(
-        rustv: u32,
-        resolve: &Resolve,
-    ) -> Result<[bool; RUSTC_VER_NUM], AuditError> {
-        unimplemented!()
+    /// Resolve the triable rustc matrix for the given used rufs.
+    fn resolve_rustc_matrix(&self, used_rufs: &Vec<String>) -> [bool; RUSTC_VER_NUM] {
+        let mut matrix = [true; RUSTC_VER_NUM];
+        for ruf in used_rufs {
+            let status = get_all_ruf_status(ruf);
+            let new_matrix = explain_status(status);
+            merge_matrix(&mut matrix, &new_matrix);
+        }
+        merge_matrix(&mut matrix, &self.overall_rustc_matrix.borrow());
+
+        return matrix;
+
+        fn explain_status(status: [RufStatus; RUSTC_VER_NUM]) -> [bool; RUSTC_VER_NUM] {
+            let mut matrix = [true; RUSTC_VER_NUM];
+            for (index, s) in status.iter().enumerate() {
+                if s.is_usable() {
+                    matrix[index] = true;
+                } else {
+                    matrix[index] = false;
+                }
+            }
+
+            return matrix;
+        }
+
+        fn merge_matrix(matrix: &mut [bool; RUSTC_VER_NUM], new_matrix: &[bool; RUSTC_VER_NUM]) {
+            for i in 0..RUSTC_VER_NUM {
+                matrix[i] &= new_matrix[i];
+            }
+        }
     }
 }
