@@ -227,8 +227,10 @@ impl<D: DepOps> DepTreeManager<D> {
 
     /// Found an issue, record it in the stacks for possible later usage.
     pub fn found_issue(&self, issue_name_ver: &str) {
-        let used_ruf = self.depresolve.2.get(issue_name_ver).unwrap();
-        let rustc_matrix = self.resolve_rustc_matrix(used_ruf);
+        let rustc_matrix = match self.depresolve.2.get(issue_name_ver) {
+            Some(used_ruf) => self.resolve_rustc_matrix(used_ruf),
+            None => self.resolve_rustc_matrix(&Vec::new()),
+        };
 
         self.issue_stacks
             .borrow_mut()

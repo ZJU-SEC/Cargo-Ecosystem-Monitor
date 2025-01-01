@@ -4,7 +4,10 @@ use cargo_lock::dependency::graph::NodeIndex;
 use petgraph::visit;
 
 use super::ops::DepOpsVirt;
-use crate::core::{AuditError, DepTreeManager};
+use crate::{
+    basic::RUSTC_VER_NUM,
+    core::{AuditError, DepTreeManager},
+};
 
 /// The main audit function.
 /// The debugger receives an output stream to write debug information.
@@ -77,6 +80,7 @@ fn check_fix(
         )
         .unwrap();
 
+        // Inform the issue and record it.
         deptree.found_issue(&issue_name_ver);
 
         if let Err(e) = deptree_fix(&mut deptree, debugger, root, issue_dep) {
@@ -89,6 +93,7 @@ fn check_fix(
                 "[VirtAudit Debug] check_fix: Deptree fix failed, try rustc switch"
             )
             .unwrap();
+
             let mut choose = None;
             let mut max_rustv = None;
             for (index, (_, matrix)) in deptree.get_issues().iter().enumerate() {
@@ -98,12 +103,20 @@ fn check_fix(
                         choose = Some(index);
                     }
                 }
+
+                writeln!(
+                    debugger,
+                    "[VirtAudit Debug] check_fix: resolve_id: {}, max_rustc: {:?}",
+                    index, max_rustv
+                )
+                .unwrap();
             }
 
             if let Some(rustv) = max_rustv {
                 writeln!(
                     debugger,
-                    "[VirtAudit Debug] check_fix: Switching rustc {} -> {}",
+                    "[VirtAudit Debug] check_fix: Choose {}, switching rustc {} -> {}",
+                    choose.unwrap(),
                     deptree.get_rustv(),
                     rustv
                 )
@@ -117,7 +130,7 @@ fn check_fix(
     }
 
     fn max_rustc_in_matrix(arr: &[bool; 64]) -> Option<usize> {
-        for i in (0..64).rev() {
+        for i in (0..RUSTC_VER_NUM).rev() {
             if arr[i] {
                 return Some(i);
             }
@@ -134,8 +147,6 @@ fn deptree_fix(
 ) -> Result<(), AuditError> {
     // Or we try to fix it, and here [`down fix`] first.
     let (issue_depnx, issue_name, issue_ver) = issue_dep;
-
-    // Inform the issue and record it.
 
     // If root, means local ruf issues, thus we must switch the rustc first.
     if issue_depnx == root {
