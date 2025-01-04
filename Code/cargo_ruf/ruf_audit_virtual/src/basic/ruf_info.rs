@@ -33,8 +33,8 @@ impl CondRufs {
         self.0.extend(rufs.into_iter());
     }
 
-    pub fn inner(self) -> Vec<CondRuf> {
-        self.0
+    pub fn borrow(&self) -> Vec<&CondRuf> {
+        self.0.iter().collect()
     }
 }
 

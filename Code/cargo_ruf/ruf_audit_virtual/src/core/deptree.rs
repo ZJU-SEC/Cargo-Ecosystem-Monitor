@@ -5,12 +5,12 @@ use cargo_lock::dependency::{
     graph::{EdgeDirection, Graph, NodeIndex},
     Tree,
 };
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use petgraph::visit::EdgeRef;
-use semver::Version;
+use semver::{Version, VersionReq};
 
 use crate::{
-    basic::{get_all_ruf_status, RufStatus, RUSTC_VER_NUM},
+    basic::{get_all_ruf_status, CondRufs, RufStatus, RUSTC_VER_NUM},
     core::{depops::DepOps, error::AuditError},
 };
 
@@ -26,13 +26,10 @@ pub struct DepTreeManager<D: DepOps> {
     ///Dependency resolve related info
     depresolve: Rc<(Resolve, Tree, UsedRufs)>,
 
-    /// Dependency limited-by lists, for upfix
-    dep_limit_by: RefCell<FxHashMap<NodeIndex, NodeIndex>>,
-    /// Audit mid-result records
-    issue_stacks: RefCell<Vec<(Rc<(Resolve, Tree, UsedRufs)>, [bool; RUSTC_VER_NUM])>>,
-
     /// Triable rustc versions
     overall_rustc_matrix: RefCell<[bool; RUSTC_VER_NUM]>,
+
+    locals: RefCell<FxHashSet<NodeIndex>>,
 }
 
 impl<D: DepOps> DepTreeManager<D> {
@@ -47,10 +44,9 @@ impl<D: DepOps> DepTreeManager<D> {
             depops: ops,
             depresolve: Rc::new((resolve, tree, used_rufs)),
 
-            dep_limit_by: RefCell::new(FxHashMap::default()),
-            issue_stacks: RefCell::new(Vec::new()),
-
             overall_rustc_matrix: RefCell::new([true; RUSTC_VER_NUM]),
+
+            locals: RefCell::new(FxHashSet::default()),
         })
     }
 
@@ -58,8 +54,8 @@ impl<D: DepOps> DepTreeManager<D> {
         Ok(self.depresolve.2.clone())
     }
 
-    pub fn check_rufs(&self, rufs: &Vec<String>) -> bool {
-        self.depops.check_rufs(self.rustv, rufs)
+    pub fn filter_rufs<'ctx>(&self, rufs: Vec<&'ctx String>) -> Vec<&'ctx String> {
+        self.depops.filter_rufs(self.rustv, rufs)
     }
 
     pub fn get_graph(&self) -> &Graph {
@@ -76,174 +72,12 @@ impl<D: DepOps> DepTreeManager<D> {
         self.rustv
     }
 
-    pub fn get_dep_limit_by(&self, pkgnx: NodeIndex) -> Option<NodeIndex> {
-        self.dep_limit_by.borrow().get(&pkgnx).cloned()
+    pub fn set_local(&self, nx: NodeIndex) {
+        self.locals.borrow_mut().insert(nx);
     }
 
-    /// Get usable candidates of a node that match it's parents' version req, and free from rufs issues.
-    pub fn get_candidates(
-        &self,
-        pkgnx: NodeIndex,
-        debugger: &mut impl Write,
-    ) -> Result<Vec<Version>, AuditError> {
-        let graph = self.get_graph();
-        let dep = &graph[pkgnx];
-        let dep_name = dep.name.to_string();
-        let dep_ver = dep.version.to_string();
-
-        let parents = self.get_parents(pkgnx);
-        assert!(parents.len() >= 1, "Fatal, root has no parents");
-
-        let candidates = self.depops.get_all_candidates(&dep_name)?;
-        assert!(!candidates.is_empty());
-
-        // Collect parents' version req on current package.
-        let mut version_reqs = Vec::new();
-        for p in parents {
-            let p_pkg = &graph[p];
-            let p_name = p_pkg.name.as_str();
-            let p_ver = p_pkg.version.to_string();
-
-            let mut meta = self.depops.get_pkg_versionreq(p_name, &p_ver)?;
-            let req = meta
-                .remove(&dep_name)
-                .expect("Fatal, cannot find dependency in parent package");
-            // prepare for relaxing strict parents.
-
-            writeln!(
-                debugger,
-                "[Deptree Debug] get_candidates: check {}@{} with parent {}@{} req: {}",
-                dep_name, dep_ver, p_name, p_ver, req
-            )
-            .unwrap();
-
-            let lowest = candidates
-                .keys()
-                .filter(|key| req.matches(key))
-                .min()
-                .cloned()
-                .expect("Fatal, cannot find lowest allowing version");
-            version_reqs.push((p, req, lowest));
-        }
-
-        // We assume parents who restricts the version most is the one with max min_lowest,
-        // and it shall be updated later, if we need up fix.
-        // This assumption won't hold for all cases (cases with complex version req),
-        // but most of the times it works.
-        let strict_parent = version_reqs
-            .iter()
-            .max_by_key(|&(_, _, v)| v)
-            .expect("Fatal, no strict parent found");
-
-        self.dep_limit_by
-            .borrow_mut()
-            .insert(pkgnx, strict_parent.0);
-
-        // we choose candidates as:
-        // 1. match its dependents' version req
-        // 2. smaller than current version
-        // 3. free from ruf issues
-        // we will record who restricts the version most, for later up fix.
-        let mut usable = Vec::new();
-        for (ver, condrufs) in candidates.into_iter().filter(|(ver, _)| {
-            version_reqs.iter().all(|(_, req, _)| req.matches(ver)) && ver < &dep.version
-        }) {
-            let rufs =
-                self.depops
-                    .resolve_condrufs(&self.depresolve.0, &dep_name, &dep_ver, condrufs)?;
-
-            let issue_rufs = self.depops.filter_issue_rufs(self.rustv, rufs.clone());
-
-            writeln!(
-                debugger,
-                "[Deptree Debug] get_candidates: check req-matched version {} with rufs: {:?}, issue: {:?}",
-                ver, rufs, issue_rufs
-            )
-            .unwrap();
-
-            if issue_rufs.is_empty() {
-                usable.push(ver);
-            }
-        }
-
-        Ok(usable)
-    }
-
-    /// Used in up fix, similar to [`get_candidates`], but get parents' candidates with older version req
-    /// to the dep package, so we can do relax.
-    pub fn get_upfix_candidates(
-        &self,
-        parent_pkgnx: NodeIndex,
-        dep_pkgnx: NodeIndex,
-        debugger: &mut impl Write,
-    ) -> Result<Vec<Version>, AuditError> {
-        let graph = self.get_graph();
-
-        let parent_pkg = &graph[parent_pkgnx];
-        let parent_name = parent_pkg.name.as_str();
-        let parent_ver = parent_pkg.version.to_string();
-
-        let dep_pkg = &graph[dep_pkgnx];
-        let dep_name = dep_pkg.name.as_str();
-
-        let parent_candidates = self.get_candidates(parent_pkgnx, debugger)?;
-
-        // Find out parent version with older version req to dep package.
-        let cur_req = self
-            .depops
-            .get_pkg_versionreq(parent_name, &parent_ver)?
-            .remove(dep_name)
-            .expect("Fatal, cannot find dependency in parent package");
-
-        let mut usable = vec![];
-        for cad in parent_candidates {
-            let mut reqs = self
-                .depops
-                .get_pkg_versionreq(parent_name, cad.to_string().as_str())?;
-
-            writeln!(
-                debugger,
-                "[Deptree Debug] get_upfix_candidates: check version {} cur_req: {}, new_req: {:?}",
-                cad,
-                cur_req,
-                reqs.get(dep_name).map(|req| req.to_string())
-            )
-            .unwrap();
-
-            if let Some(req) = reqs.remove(dep_name) {
-                // We take the assumption that, older verison shall have looser semver req,
-                // so if req differs, we assume it's a candidate, since semver comparision can be hard.
-                if req != cur_req {
-                    usable.push(cad);
-                }
-            } else {
-                // dep not found, possibily not used, thus ok too.
-                usable.push(cad);
-            }
-        }
-
-        Ok(usable)
-    }
-
-    /// Found an issue, record it in the stacks for possible later usage.
-    pub fn found_issue(&self, issue_name_ver: &str) {
-        let rustc_matrix = match self.depresolve.2.get(issue_name_ver) {
-            Some(used_ruf) => self.resolve_rustc_matrix(used_ruf),
-            None => self.resolve_rustc_matrix(&Vec::new()),
-        };
-
-        self.issue_stacks
-            .borrow_mut()
-            .push((self.depresolve.clone(), rustc_matrix));
-    }
-
-    /// When deptree fix failed, rustc switch is needed. To decide which rustc
-    /// to switch to, and which resolve we use to continue,
-    /// we need to check the issue stacks, and find the best rustc and resolve.
-    pub fn get_issues(
-        &self,
-    ) -> std::cell::Ref<Vec<(Rc<(Resolve, Tree, UsedRufs)>, [bool; RUSTC_VER_NUM])>> {
-        self.issue_stacks.borrow()
+    pub fn is_local(&self, nx: &NodeIndex) -> bool {
+        self.locals.borrow().contains(nx)
     }
 
     /// Update a package in the dependency tree.
@@ -253,15 +87,7 @@ impl<D: DepOps> DepTreeManager<D> {
         prev_ver: &str,
         new_ver: &str,
     ) -> Result<(), AuditError> {
-        let (new_resolve, new_tree) =
-            self.depops
-                .update_resolve(&self.depresolve.0, name, prev_ver, new_ver)?;
-        let used_rufs = self.depops.extract_rufs(&new_resolve)?;
-
-        self.depresolve = Rc::new((new_resolve, new_tree, used_rufs));
-        self.dep_limit_by.borrow_mut().clear();
-
-        Ok(())
+        unimplemented!()
     }
 
     /// Since we are rustc-oriented, we always wants newer rustc, and thus during the fix,
@@ -269,19 +95,7 @@ impl<D: DepOps> DepTreeManager<D> {
     ///
     /// During the switch, the continue point matters.
     pub fn update_rustc(&mut self, rustv: u32, resolve_id: usize) {
-        self.rustv = rustv;
-        self.depresolve = self.issue_stacks.borrow()[resolve_id].0.clone();
-
-        // Updates the overall rustc matrix, record those impossible.
-        let mut overall_rustc_matrix = self.overall_rustc_matrix.borrow_mut();
-        for (_, matrix) in self.issue_stacks.borrow().iter() {
-            for i in 0..RUSTC_VER_NUM {
-                overall_rustc_matrix[i] |= matrix[i];
-            }
-        }
-
-        self.issue_stacks.borrow_mut().clear();
-        self.dep_limit_by.borrow_mut().clear();
+        unimplemented!()
     }
 
     /// Get the parents of a node in the dependency tree.
@@ -294,35 +108,270 @@ impl<D: DepOps> DepTreeManager<D> {
             .collect()
     }
 
-    /// Resolve the triable rustc matrix for the given used rufs.
-    fn resolve_rustc_matrix(&self, used_rufs: &Vec<String>) -> [bool; RUSTC_VER_NUM] {
-        let mut matrix = [true; RUSTC_VER_NUM];
-        for ruf in used_rufs {
-            let status = get_all_ruf_status(ruf);
-            let new_matrix = explain_status(status);
-            merge_matrix(&mut matrix, &new_matrix);
+    /// This function will check whether the issue is fixable under current configs.
+    pub fn issue_fixable(
+        &self,
+        issue_nx: NodeIndex,
+        debugger: &mut impl Write,
+    ) -> Result<bool, AuditError> {
+        let graph = self.get_graph();
+        let dep = &graph[issue_nx];
+        let dep_name = dep.name.to_string();
+        let dep_ver = dep.version.to_string();
+
+        // FIXME: locals checks here.
+
+        // 1. Check direct fixable first.
+        let req = VersionReq::parse("*").map_err(|e| AuditError::InnerError(e.to_string()))?;
+        let candidates = self.depops.get_all_candidates(&dep_name, req).unwrap();
+        assert!(!candidates.is_empty(), "Fatal, not any candidates found");
+
+        let ruf_ok_candidates = self.get_ruf_ok_candidates(&dep_name, &dep_ver, &candidates)?;
+        writeln!(
+            debugger,
+            "[Deptree Debug] issue_fixable: direct check, ruf_ok_candidates {:?}",
+            ruf_ok_candidates
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+        )
+        .unwrap();
+        // Ok this can not be fixed, of course.
+        if ruf_ok_candidates.is_empty() {
+            return Ok(false);
         }
-        merge_matrix(&mut matrix, &self.overall_rustc_matrix.borrow());
 
-        return matrix;
+        // And here we check whether these ruf-oks are acceptable by parents.
+        let req_ok_candidates = self.get_req_ok_candidates(issue_nx, &ruf_ok_candidates)?;
+        writeln!(
+            debugger,
+            "[Deptree Debug] issue_fixable: direct check, req_ok_candidates {:?}",
+            req_ok_candidates
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+        )
+        .unwrap();
+        if !req_ok_candidates.is_empty() {
+            // Ok we have usable versions here.
+            return Ok(true);
+        }
 
-        fn explain_status(status: [RufStatus; RUSTC_VER_NUM]) -> [bool; RUSTC_VER_NUM] {
-            let mut matrix = [true; RUSTC_VER_NUM];
-            for (index, s) in status.iter().enumerate() {
-                if s.is_usable() {
-                    matrix[index] = true;
-                } else {
-                    matrix[index] = false;
+        // 2. Or we have to check the parents.
+        // The main idea is to find usable parents that accept the ruf-ok childs.
+        for usable_child in ruf_ok_candidates {
+            let mut chain = self.get_req_ok_parents(issue_nx, usable_child, debugger)?;
+            if !chain.is_empty() {
+                chain.push((issue_nx, usable_child.clone()));
+                writeln!(
+                    debugger,
+                    "[Deptree Debug] issue_fixable: parent chain check, chain {:?}",
+                    chain
+                        .iter()
+                        .map(|(nx, ver)| format!(
+                            "{}@{} -> {}",
+                            graph[*nx].name,
+                            graph[*nx].version.to_string(),
+                            ver
+                        ))
+                        .collect::<Vec<_>>()
+                )
+                .unwrap();
+                break;
+            } else {
+                writeln!(
+                    debugger,
+                    "[Deptree Debug] issue_fixable: parent chain check, chain empty {}@{}",
+                    dep_name, usable_child
+                )
+                .unwrap();
+            }
+        }
+
+        unimplemented!()
+    }
+
+    /// Find candidates free from ruf issues under current configs, the returned candidates are sorted by version.
+    fn get_ruf_ok_candidates<'ctx>(
+        &self,
+        pkg_name: &str,
+        pkg_ver: &str,
+        candidates: &'ctx FxHashMap<Version, CondRufs>,
+    ) -> Result<Vec<&'ctx Version>, AuditError> {
+        let mut usable = Vec::new();
+        for (ver, condrufs) in candidates.into_iter() {
+            let rufs =
+                self.depops
+                    .resolve_condrufs(&self.depresolve.0, &pkg_name, &pkg_ver, &condrufs)?;
+            let issue_rufs = self.depops.filter_rufs(self.rustv, rufs);
+
+            if issue_rufs.is_empty() {
+                usable.push(ver);
+            }
+        }
+
+        // Sort the usable from latest to oldest.
+        usable.sort();
+        usable.reverse();
+
+        Ok(usable)
+    }
+
+    /// Find candidates match parents' version req under current configs.
+    fn get_req_ok_candidates<'ctx>(
+        &self,
+        pkg_nx: NodeIndex,
+        candidates: &Vec<&'ctx Version>,
+    ) -> Result<Vec<&'ctx Version>, AuditError> {
+        let graph = self.get_graph();
+        let pkg_name = graph[pkg_nx].name.as_str();
+        let parents = self.get_parents(pkg_nx);
+
+        // Collect parents' version req on current package.
+        let mut version_reqs = Vec::new();
+        for p in parents {
+            let p_pkg = &graph[p];
+            let p_name = p_pkg.name.as_str();
+            let p_ver = p_pkg.version.to_string();
+
+            let mut meta = self.depops.get_pkg_versionreq(p_name, &p_ver)?;
+            let req = meta
+                .remove(pkg_name)
+                .expect("Fatal, cannot find dependency in parent package");
+
+            version_reqs.push((p, req));
+        }
+
+        let usable = candidates
+            .into_iter()
+            .filter(|ver| version_reqs.iter().all(|(_, req)| req.matches(ver)))
+            .map(|ver| *ver)
+            .collect();
+
+        Ok(usable)
+    }
+
+    /// Get max usable parents version chain in tree that accept the given child version.
+    fn get_req_ok_parents(
+        &self,
+        child_nx: NodeIndex,
+        child: &Version,
+        debugger: &mut impl Write,
+    ) -> Result<Vec<(NodeIndex, Version)>, AuditError> {
+        let parents = self.get_parents(child_nx);
+        let mut fix = Vec::new();
+
+        let graph = self.get_graph();
+
+        for p in parents {
+            writeln!(
+                debugger,
+                "[Deptree Debug] get_req_ok_parents: check parent {} - child {}@{}",
+                graph[p].name,
+                graph[child_nx].name,
+                child.to_string()
+            )
+            .unwrap();
+            if self.is_local(&p) {
+                // Ok locals reached, no more version can be changed.
+                return Ok(fix);
+            }
+
+            let req_ok_parents = self.get_req_ok_parent(p, child_nx, child)?;
+            writeln!(
+                debugger,
+                "[Deptree Debug] get_req_ok_parents: parent {} req_ok_parents {:?}",
+                graph[p].name,
+                req_ok_parents
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+            )
+            .unwrap();
+            let usables = self.get_req_ok_candidates(p, &req_ok_parents.iter().collect())?;
+            writeln!(
+                debugger,
+                "[Deptree Debug] get_req_ok_parents: parent {} usables {:?}",
+                graph[p].name,
+                usables.iter().map(|v| v.to_string()).collect::<Vec<_>>()
+            )
+            .unwrap();
+            if !usables.is_empty() {
+                // Ok we find needed parents.
+                fix.push((p, usables[0].clone()));
+            } else {
+                // Or we still need to go up, try from latest req_ok_parents.
+                for req_ok_p in req_ok_parents {
+                    let chain = self.get_req_ok_parents(p, &req_ok_p, debugger)?;
+                    writeln!(
+                        debugger,
+                        "[Deptree Debug] get_req_ok_parents: parent {} chain {:?}",
+                        graph[p].name,
+                        chain
+                            .iter()
+                            .map(|(nx, ver)| format!("{}-{}", graph[*nx].name, ver))
+                            .collect::<Vec<_>>()
+                    )
+                    .unwrap();
+                    if chain.is_empty() {
+                        continue;
+                    } else {
+                        fix.extend(chain);
+                        fix.push((p, req_ok_p));
+                        break;
+                    }
+                }
+                if fix.is_empty() {
+                    // No usable parents found, the fix failed.
+                    return Ok(fix);
                 }
             }
-
-            return matrix;
         }
 
-        fn merge_matrix(matrix: &mut [bool; RUSTC_VER_NUM], new_matrix: &[bool; RUSTC_VER_NUM]) {
-            for i in 0..RUSTC_VER_NUM {
-                matrix[i] &= new_matrix[i];
+        Ok(fix)
+    }
+
+    /// Get all usable versions of one parent.
+    fn get_req_ok_parent(
+        &self,
+        parent_nx: NodeIndex,
+        child_nx: NodeIndex,
+        child: &Version,
+    ) -> Result<Vec<Version>, AuditError> {
+        let graph = self.get_graph();
+        let parent_pkg = &graph[parent_nx];
+        let parent_name = parent_pkg.name.as_str();
+        let parent_ver = parent_pkg.version.to_string();
+
+        let child_pkg = &graph[child_nx];
+        let child_name = child_pkg.name.as_str();
+
+        let req = VersionReq::parse(&format!("<={}", parent_ver))
+            .map_err(|e| AuditError::InnerError(e.to_string()))?;
+        let parent_candidates = self.depops.get_all_candidates(parent_name, req)?;
+        let ruf_ok_candidates =
+            self.get_ruf_ok_candidates(&parent_name, &parent_ver, &parent_candidates)?;
+        assert!(
+            !ruf_ok_candidates.is_empty(),
+            "Fatal, not any parent ruf_ok_candidates found"
+        );
+
+        let mut usable = Vec::new();
+
+        for p in ruf_ok_candidates {
+            let mut meta = self
+                .depops
+                .get_pkg_versionreq(parent_name, p.to_string().as_str())?;
+            if let Some(req) = meta.remove(child_name) {
+                if req.matches(child) {
+                    usable.push(p.clone());
+                }
+            } else {
+                // The parent nolong need this child dep, so ok.
+                usable.push(p.clone());
             }
         }
+
+        Ok(usable)
     }
 }

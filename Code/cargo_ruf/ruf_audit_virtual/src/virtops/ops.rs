@@ -28,9 +28,6 @@ lazy_static::lazy_static! {
 }
 
 /*
-    -- We have to strip empty cond('') to NULL --
-    UPDATE version_feature SET conds = NULL WHERE conds = ''
-
     -- Currently we HAVE NOT created this table --
     CREATE TABLE version_ruf AS
     SELECT versions_with_name.id, versions_with_name.name, versions_with_name.num, versions_with_name.crate_id, version_feature.conds, version_feature.feature
@@ -38,6 +35,10 @@ lazy_static::lazy_static! {
     JOIN version_feature
     ON versions_with_name.id = version_feature.id
 
+    -- We have to strip empty cond('') to NULL --
+    UPDATE version_ruf SET conds = NULL WHERE conds = ''
+
+    -- And also the dependencies table --
     CREATE VIEW dependencies_with_name AS
     SELECT dependencies.*, crates.name AS crate_name
     FROM dependencies
@@ -141,7 +142,11 @@ impl DepOpsVirt {
         Ok(version_id[0].get::<usize, i32>(0))
     }
 
-    fn get_cads_with_crate_name(&self, name: &str) -> Result<FxHashMap<Version, CondRufs>, String> {
+    fn get_cads_with_crate_name(
+        &self,
+        name: &str,
+        req: VersionReq,
+    ) -> Result<FxHashMap<Version, CondRufs>, String> {
         let rows = self
             .conn
             .lock()
@@ -157,6 +162,11 @@ impl DepOpsVirt {
             let ver = row.get::<_, String>(0);
             let ver = Version::parse(&ver)
                 .map_err(|e| format!("Version parse failure, invalid version: {} {}", ver, e))?;
+
+            // Version filter here.
+            if !req.matches(&ver) {
+                continue;
+            }
 
             let entry = dep_rufs.entry(ver).or_insert_with(CondRufs::empty);
 
@@ -468,13 +478,17 @@ impl DepOpsVirt {
 }
 
 impl DepOps for DepOpsVirt {
-    fn get_all_candidates(&self, name: &str) -> Result<FxHashMap<Version, CondRufs>, AuditError> {
+    fn get_all_candidates(
+        &self,
+        name: &str,
+        req: VersionReq,
+    ) -> Result<FxHashMap<Version, CondRufs>, AuditError> {
         // Check locals first
         if self.locals.contains_key(name) {
             return Ok(FxHashMap::default());
         }
 
-        self.get_cads_with_crate_name(name)
+        self.get_cads_with_crate_name(name, req)
             .map_err(|e| AuditError::InnerError(e))
     }
 
@@ -504,13 +518,13 @@ impl DepOps for DepOpsVirt {
             .map_err(|e| AuditError::InnerError(e))
     }
 
-    fn resolve_condrufs(
+    fn resolve_condrufs<'ctx>(
         &self,
         resolve: &Resolve,
         name: &str,
         ver: &str,
-        condrufs: CondRufs,
-    ) -> Result<Vec<String>, AuditError> {
+        condrufs: &'ctx CondRufs,
+    ) -> Result<Vec<&'ctx String>, AuditError> {
         let mut rufs = FxHashSet::default();
 
         let pkg_id = resolve
@@ -519,39 +533,26 @@ impl DepOps for DepOpsVirt {
 
         let pkg_features = resolve.features(pkg_id);
 
-        for condruf in condrufs.inner() {
-            if let Some(cond) = condruf.cond {
+        for condruf in condrufs.borrow() {
+            if let Some(cond) = &condruf.cond {
                 assert!(!cond.is_empty());
                 if let Some(caps) = RE_CONDS.captures(&cond) {
                     let cond_pf = caps.get(1).expect("Fatal, invalid regex capture").as_str();
                     if pkg_features.contains(&InternedString::new(cond_pf)) {
-                        rufs.insert(condruf.feature);
+                        rufs.insert(&condruf.feature);
                     }
                 } // Or it's not `feature = "xxx"` condition, we assume it not enabled.
             } else {
-                rufs.insert(condruf.feature);
+                rufs.insert(&condruf.feature);
             }
         }
 
         Ok(rufs.drain().collect())
     }
 
-    fn check_rufs(&self, rustv: u32, rufs: &Vec<String>) -> bool {
-        if rufs
-            .iter()
-            .filter(|ruf| !basic::get_ruf_status(ruf, rustv).is_usable())
-            .count()
-            > 0
-        {
-            return false;
-        }
-
-        return true;
-    }
-
-    fn filter_issue_rufs(&self, rustv: u32, rufs: Vec<String>) -> Vec<String> {
+    fn filter_rufs<'ctx>(&self, rustv: u32, rufs: Vec<&'ctx String>) -> Vec<&'ctx String> {
         rufs.into_iter()
-            .filter(|ruf| !basic::get_ruf_status(&ruf, rustv).is_usable())
+            .filter(|ruf| !basic::get_ruf_status(ruf, rustv).is_usable())
             .collect()
     }
 
