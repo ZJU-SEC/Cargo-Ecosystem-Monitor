@@ -297,12 +297,8 @@ impl DepOpsVirt {
     fn do_update_resolve(
         &self,
         prev_resolve: &Resolve,
-        name: &str,
-        prev_ver: &str,
-        new_ver: &str,
+        updates: Vec<(&str, &str, &str)>,
     ) -> Result<(Resolve, Tree), String> {
-        let name_ver = format!("{}@{}", name, prev_ver);
-
         let config = GlobalContext::new(
             Shell::new(),
             self.workspace_path.clone(),
@@ -319,20 +315,24 @@ impl DepOpsVirt {
         let mut to_avoid = HashSet::new();
 
         let mut sources = Vec::new();
-        let dep = prev_resolve.query(&name_ver).unwrap();
+        for (name, prev_ver, new_ver) in updates {
+            let name_ver = format!("{}@{}", name, prev_ver);
+            let pkg_id = prev_resolve.query(&name_ver).unwrap();
 
-        to_avoid.insert(dep);
-        sources.push({
-            assert!(dep.source_id().is_registry());
-            dep.source_id()
-                .with_precise_registry_version(dep.name(), dep.version().clone(), new_ver)
-                .map_err(|e| e.to_string())?
-        });
+            to_avoid.insert(pkg_id);
+            sources.push({
+                assert!(pkg_id.source_id().is_registry());
+                pkg_id
+                    .source_id()
+                    .with_precise_registry_version(pkg_id.name(), pkg_id.version().clone(), new_ver)
+                    .map_err(|e| e.to_string())?
+            });
 
-        if let Ok(unused_id) =
-            PackageIdSpec::query_str(&name_ver, prev_resolve.unused_patches().iter().cloned())
-        {
-            to_avoid.insert(unused_id);
+            if let Ok(unused_id) =
+                PackageIdSpec::query_str(&name_ver, prev_resolve.unused_patches().iter().cloned())
+            {
+                to_avoid.insert(unused_id);
+            }
         }
 
         // Mirror `--workspace` and never avoid workspace members.
@@ -564,11 +564,9 @@ impl DepOps for DepOpsVirt {
     fn update_resolve(
         &self,
         prev_resolve: &Resolve,
-        name: &str,
-        prev_ver: &str,
-        new_ver: &str,
+        updates: Vec<(&str, &str, &str)>,
     ) -> Result<(Resolve, Tree), AuditError> {
-        self.do_update_resolve(prev_resolve, name, prev_ver, new_ver)
+        self.do_update_resolve(prev_resolve, updates)
             .map_err(|e| AuditError::InnerError(e))
     }
 }

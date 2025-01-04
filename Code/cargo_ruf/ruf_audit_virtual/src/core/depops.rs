@@ -40,8 +40,6 @@ pub trait DepOps {
     fn update_resolve(
         &self,
         prev_resolve: &Resolve,
-        name: &str,
-        prev_ver: &str,
-        new_ver: &str,
+        updates: Vec<(&str, &str, &str)>,
     ) -> Result<(Resolve, Tree), AuditError>;
 }

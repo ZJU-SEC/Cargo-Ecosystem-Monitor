@@ -3,7 +3,7 @@ pub enum AuditError {
     /// For unexpected errors.
     InnerError(String),
     /// Fix failure errors, and record which dep cause it.
-    FunctionError(String, Option<String>),
+    FunctionError(Option<String>, Option<String>),
 }
 
 impl AuditError {

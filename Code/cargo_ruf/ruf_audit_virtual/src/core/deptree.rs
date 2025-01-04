@@ -10,7 +10,7 @@ use petgraph::visit::EdgeRef;
 use semver::{Version, VersionReq};
 
 use crate::{
-    basic::{get_all_ruf_status, CondRufs, RufStatus, RUSTC_VER_NUM},
+    basic::CondRufs,
     core::{depops::DepOps, error::AuditError},
 };
 
@@ -26,10 +26,7 @@ pub struct DepTreeManager<D: DepOps> {
     ///Dependency resolve related info
     depresolve: Rc<(Resolve, Tree, UsedRufs)>,
 
-    /// Triable rustc versions
-    overall_rustc_matrix: RefCell<[bool; RUSTC_VER_NUM]>,
-
-    locals: RefCell<FxHashSet<NodeIndex>>,
+    locals: RefCell<FxHashSet<String>>,
 }
 
 impl<D: DepOps> DepTreeManager<D> {
@@ -43,8 +40,6 @@ impl<D: DepOps> DepTreeManager<D> {
 
             depops: ops,
             depresolve: Rc::new((resolve, tree, used_rufs)),
-
-            overall_rustc_matrix: RefCell::new([true; RUSTC_VER_NUM]),
 
             locals: RefCell::new(FxHashSet::default()),
         })
@@ -68,44 +63,36 @@ impl<D: DepOps> DepTreeManager<D> {
         roots[0]
     }
 
+    pub fn set_rustv(&mut self, rustv: u32) {
+        self.rustv = rustv;
+    }
+
     pub fn get_rustv(&self) -> u32 {
         self.rustv
     }
 
-    pub fn set_local(&self, nx: NodeIndex) {
-        self.locals.borrow_mut().insert(nx);
+    pub fn set_local(&self, nx: &NodeIndex) {
+        let node = &self.get_graph()[*nx];
+        self.locals
+            .borrow_mut()
+            .insert(format!("{}@{}", node.name, node.version));
     }
 
     pub fn is_local(&self, nx: &NodeIndex) -> bool {
-        self.locals.borrow().contains(nx)
+        let node = &self.get_graph()[*nx];
+        self.locals
+            .borrow()
+            .contains(&format!("{}@{}", node.name, node.version))
     }
 
     /// Update a package in the dependency tree.
-    pub fn update_pkg(
-        &mut self,
-        name: &str,
-        prev_ver: &str,
-        new_ver: &str,
-    ) -> Result<(), AuditError> {
-        unimplemented!()
-    }
+    pub fn update_pkg(&mut self, updates: Vec<(&str, &str, &str)>) -> Result<(), AuditError> {
+        let (resolve, tree) = self.depops.update_resolve(&self.depresolve.0, updates)?;
+        let used_rufs = self.depops.extract_rufs(&resolve)?;
 
-    /// Since we are rustc-oriented, we always wants newer rustc, and thus during the fix,
-    /// we will try deptree fix first with newer rustc, and do rustc switch when failure.
-    ///
-    /// During the switch, the continue point matters.
-    pub fn update_rustc(&mut self, rustv: u32, resolve_id: usize) {
-        unimplemented!()
-    }
+        self.depresolve = Rc::new((resolve, tree, used_rufs));
 
-    /// Get the parents of a node in the dependency tree.
-    fn get_parents(&self, depnx: NodeIndex) -> Vec<NodeIndex> {
-        self.depresolve
-            .1
-            .graph()
-            .edges_directed(depnx, EdgeDirection::Incoming)
-            .map(|edge| edge.source())
-            .collect()
+        Ok(())
     }
 
     /// This function will check whether the issue is fixable under current configs.
@@ -113,14 +100,18 @@ impl<D: DepOps> DepTreeManager<D> {
         &self,
         issue_nx: NodeIndex,
         debugger: &mut impl Write,
-    ) -> Result<bool, AuditError> {
+    ) -> Result<FxHashMap<NodeIndex, Version>, AuditError> {
         let graph = self.get_graph();
         let dep = &graph[issue_nx];
         let dep_name = dep.name.to_string();
         let dep_ver = dep.version.to_string();
 
-        // FIXME: locals checks here.
+        // If local, no version fix of course.
+        if self.is_local(&issue_nx) {
+            return Err(AuditError::FunctionError(None, None));
+        }
 
+        let mut fix = FxHashMap::default();
         // 1. Check direct fixable first.
         let req = VersionReq::parse("*").map_err(|e| AuditError::InnerError(e.to_string()))?;
         let candidates = self.depops.get_all_candidates(&dep_name, req).unwrap();
@@ -136,9 +127,10 @@ impl<D: DepOps> DepTreeManager<D> {
                 .collect::<Vec<_>>()
         )
         .unwrap();
-        // Ok this can not be fixed, of course.
+
+        // Ok this can not be fixed.
         if ruf_ok_candidates.is_empty() {
-            return Ok(false);
+            return Err(AuditError::FunctionError(None, None));
         }
 
         // And here we check whether these ruf-oks are acceptable by parents.
@@ -154,7 +146,8 @@ impl<D: DepOps> DepTreeManager<D> {
         .unwrap();
         if !req_ok_candidates.is_empty() {
             // Ok we have usable versions here.
-            return Ok(true);
+            fix.insert(issue_nx, req_ok_candidates[0].clone());
+            return Ok(fix);
         }
 
         // 2. Or we have to check the parents.
@@ -177,18 +170,23 @@ impl<D: DepOps> DepTreeManager<D> {
                         .collect::<Vec<_>>()
                 )
                 .unwrap();
-                break;
+                for (p, ver) in chain {
+                    let check_dup = fix.insert(p, ver);
+                    assert!(check_dup.is_none(), "Fatal, duplicate parent fix found");
+                }
+
+                return Ok(fix);
             } else {
                 writeln!(
                     debugger,
-                    "[Deptree Debug] issue_fixable: parent chain check, chain empty {}@{}",
+                    "[Deptree Debug] issue_fixable: parent chain check, chain empty when choose child {}@{}",
                     dep_name, usable_child
                 )
                 .unwrap();
             }
         }
 
-        unimplemented!()
+        return Err(AuditError::FunctionError(None, None));
     }
 
     /// Find candidates free from ruf issues under current configs, the returned candidates are sorted by version.
@@ -274,7 +272,7 @@ impl<D: DepOps> DepTreeManager<D> {
             .unwrap();
             if self.is_local(&p) {
                 // Ok locals reached, no more version can be changed.
-                return Ok(fix);
+                return Err(AuditError::FunctionError(None, None));
             }
 
             let req_ok_parents = self.get_req_ok_parent(p, child_nx, child)?;
@@ -302,20 +300,17 @@ impl<D: DepOps> DepTreeManager<D> {
             } else {
                 // Or we still need to go up, try from latest req_ok_parents.
                 for req_ok_p in req_ok_parents {
-                    let chain = self.get_req_ok_parents(p, &req_ok_p, debugger)?;
-                    writeln!(
-                        debugger,
-                        "[Deptree Debug] get_req_ok_parents: parent {} chain {:?}",
-                        graph[p].name,
-                        chain
-                            .iter()
-                            .map(|(nx, ver)| format!("{}-{}", graph[*nx].name, ver))
-                            .collect::<Vec<_>>()
-                    )
-                    .unwrap();
-                    if chain.is_empty() {
-                        continue;
-                    } else {
+                    if let Ok(chain) = self.get_req_ok_parents(p, &req_ok_p, debugger) {
+                        writeln!(
+                            debugger,
+                            "[Deptree Debug] get_req_ok_parents: parent {} chain {:?}",
+                            graph[p].name,
+                            chain
+                                .iter()
+                                .map(|(nx, ver)| format!("{}-{}", graph[*nx].name, ver))
+                                .collect::<Vec<_>>()
+                        )
+                        .unwrap();
                         fix.extend(chain);
                         fix.push((p, req_ok_p));
                         break;
@@ -323,7 +318,7 @@ impl<D: DepOps> DepTreeManager<D> {
                 }
                 if fix.is_empty() {
                     // No usable parents found, the fix failed.
-                    return Ok(fix);
+                    return Err(AuditError::FunctionError(None, None));
                 }
             }
         }
@@ -373,5 +368,15 @@ impl<D: DepOps> DepTreeManager<D> {
         }
 
         Ok(usable)
+    }
+
+    /// Get the parents of a node in the dependency tree.
+    fn get_parents(&self, depnx: NodeIndex) -> Vec<NodeIndex> {
+        self.depresolve
+            .1
+            .graph()
+            .edges_directed(depnx, EdgeDirection::Incoming)
+            .map(|edge| edge.source())
+            .collect()
     }
 }
