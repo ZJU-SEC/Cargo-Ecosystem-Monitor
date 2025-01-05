@@ -1,9 +1,11 @@
+use cargo_lock::dependency::graph::NodeIndex;
+
 #[derive(Debug)]
 pub enum AuditError {
     /// For unexpected errors.
     InnerError(String),
     /// Fix failure errors, and record which dep cause it.
-    FunctionError(Option<String>, Option<String>),
+    FunctionError(Option<String>, Option<NodeIndex>),
 }
 
 impl AuditError {

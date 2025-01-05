@@ -23,8 +23,10 @@ pub struct DepTreeManager<D: DepOps> {
 
     /// Depencency operators
     depops: D,
-    ///Dependency resolve related info
+    /// Dependency resolve related info
     depresolve: Rc<(Resolve, Tree, UsedRufs)>,
+    /// Store the max resolve tree.
+    maxresolve: Rc<(Resolve, Tree, UsedRufs)>,
 
     locals: RefCell<FxHashSet<String>>,
 }
@@ -34,12 +36,14 @@ impl<D: DepOps> DepTreeManager<D> {
     pub fn new(ops: D, rustv: u32) -> Result<Self, AuditError> {
         let (resolve, tree) = ops.first_resolve()?;
         let used_rufs = ops.extract_rufs(&resolve)?;
+        let resolve = Rc::new((resolve, tree, used_rufs));
 
         Ok(Self {
             rustv: rustv,
 
             depops: ops,
-            depresolve: Rc::new((resolve, tree, used_rufs)),
+            depresolve: resolve.clone(),
+            maxresolve: resolve,
 
             locals: RefCell::new(FxHashSet::default()),
         })
@@ -57,25 +61,17 @@ impl<D: DepOps> DepTreeManager<D> {
         self.depresolve.1.graph()
     }
 
-    pub fn get_root(&self) -> NodeIndex {
-        let roots = self.depresolve.1.roots();
-        assert!(roots.len() == 1, "Fatal, multiple roots found");
-        roots[0]
-    }
-
-    pub fn set_rustv(&mut self, rustv: u32) {
-        self.rustv = rustv;
-    }
-
-    pub fn get_rustv(&self) -> u32 {
-        self.rustv
-    }
-
     pub fn set_local(&self, nx: &NodeIndex) {
         let node = &self.get_graph()[*nx];
         self.locals
             .borrow_mut()
             .insert(format!("{}@{}", node.name, node.version));
+    }
+
+    pub fn get_root(&self) -> NodeIndex {
+        let roots = self.depresolve.1.roots();
+        assert!(roots.len() == 1, "Fatal, multiple roots found");
+        roots[0]
     }
 
     pub fn is_local(&self, nx: &NodeIndex) -> bool {
@@ -85,14 +81,25 @@ impl<D: DepOps> DepTreeManager<D> {
             .contains(&format!("{}@{}", node.name, node.version))
     }
 
-    /// Update a package in the dependency tree.
-    pub fn update_pkg(&mut self, updates: Vec<(&str, &str, &str)>) -> Result<(), AuditError> {
+    pub fn get_lockfile(&self) -> Result<String, AuditError> {
+        self.depops.get_resolve_lockfile(&self.depresolve.0)
+    }
+
+    /// Update packages in the dependency tree.
+    pub fn update_pkg(&mut self, updates: Vec<(String, String, String)>) -> Result<(), AuditError> {
         let (resolve, tree) = self.depops.update_resolve(&self.depresolve.0, updates)?;
         let used_rufs = self.depops.extract_rufs(&resolve)?;
 
         self.depresolve = Rc::new((resolve, tree, used_rufs));
 
         Ok(())
+    }
+
+    /// Update rust version configs.
+    pub fn update_rustv(&mut self, rustv: u32) {
+        self.rustv = rustv;
+        // Restore the max tree.
+        self.depresolve = self.maxresolve.clone();
     }
 
     /// This function will check whether the issue is fixable under current configs.
@@ -362,7 +369,7 @@ impl<D: DepOps> DepTreeManager<D> {
                     usable.push(p.clone());
                 }
             } else {
-                // The parent nolong need this child dep, so ok.
+                // The parent nolonger need this child dep, so ok.
                 usable.push(p.clone());
             }
         }

@@ -297,7 +297,7 @@ impl DepOpsVirt {
     fn do_update_resolve(
         &self,
         prev_resolve: &Resolve,
-        updates: Vec<(&str, &str, &str)>,
+        updates: Vec<(String, String, String)>,
     ) -> Result<(Resolve, Tree), String> {
         let config = GlobalContext::new(
             Shell::new(),
@@ -324,7 +324,11 @@ impl DepOpsVirt {
                 assert!(pkg_id.source_id().is_registry());
                 pkg_id
                     .source_id()
-                    .with_precise_registry_version(pkg_id.name(), pkg_id.version().clone(), new_ver)
+                    .with_precise_registry_version(
+                        pkg_id.name(),
+                        pkg_id.version().clone(),
+                        &new_ver,
+                    )
                     .map_err(|e| e.to_string())?
             });
 
@@ -564,10 +568,24 @@ impl DepOps for DepOpsVirt {
     fn update_resolve(
         &self,
         prev_resolve: &Resolve,
-        updates: Vec<(&str, &str, &str)>,
+        updates: Vec<(String, String, String)>,
     ) -> Result<(Resolve, Tree), AuditError> {
         self.do_update_resolve(prev_resolve, updates)
             .map_err(|e| AuditError::InnerError(e))
+    }
+
+    fn get_resolve_lockfile(&self, resolve: &Resolve) -> Result<String, AuditError> {
+        let config = GlobalContext::new(
+            Shell::new(),
+            self.workspace_path.clone(),
+            self.registry_path.clone(),
+        );
+        let ws = Workspace::new(&self.toml_path, &config)
+            .map_err(|e| AuditError::InnerError(e.to_string()))?;
+        let lockfile = ops::resolve_to_string(&ws, resolve)
+            .map_err(|e| AuditError::InnerError(e.to_string()))?;
+
+        Ok(lockfile)
     }
 }
 

@@ -40,6 +40,8 @@ pub trait DepOps {
     fn update_resolve(
         &self,
         prev_resolve: &Resolve,
-        updates: Vec<(&str, &str, &str)>,
+        updates: Vec<(String, String, String)>,
     ) -> Result<(Resolve, Tree), AuditError>;
+    /// Get lockfile from the resolve
+    fn get_resolve_lockfile(&self, resolve: &Resolve) -> Result<String, AuditError>;
 }
