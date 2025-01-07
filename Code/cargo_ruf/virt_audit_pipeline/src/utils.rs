@@ -22,6 +22,7 @@ use std::{
     panic,
     sync::{Arc, Mutex},
     thread,
+    time::Instant,
 };
 
 use crossbeam::channel;
@@ -87,6 +88,7 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                     info!("[{}] Start auditing {}@{}", i, &version.name, &version.num);
                     let output = Arc::new(Mutex::new(Vec::new()));
 
+                    let start_time = Instant::now();
                     match panic::catch_unwind(|| {
                         audit(
                             &version.name,
@@ -96,18 +98,20 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                         )
                     }) {
                         Ok(audit_result) => {
+                            let duration = start_time.elapsed();
                             info!("[{}] Done auditing: {}@{}", i, &version.name, &version.num);
                             let output = String::from_utf8(output.lock().unwrap().to_vec())
                                 .expect("cannot convert output to string");
                             match audit_result {
-                                Ok(_) => {
+                                Ok(rustv) => {
                                     store_audit_results(
                                         Arc::clone(&conn),
                                         version.version_id,
                                         "success",
-                                        None,
+                                        Some(rustv as i32),
                                         None,
                                         Some(&output),
+                                        duration,
                                     );
                                     update_process_status(
                                         Arc::clone(&conn),
@@ -116,21 +120,20 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                     );
                                 }
                                 Err(e) => {
-                                    let (status, issue_dep, error) = match e {
-                                        AuditError::InnerError(error) => {
-                                            ("inner fail", None, error)
-                                        }
-                                        AuditError::FunctionError(error, issue_dep) => {
-                                            ("fix fail", issue_dep, error)
+                                    let (status, error) = match e {
+                                        AuditError::InnerError(error) => ("inner fail", error),
+                                        AuditError::FunctionError(_, _) => {
+                                            ("fix fail", "all methods failed".to_string())
                                         }
                                     };
                                     store_audit_results(
                                         Arc::clone(&conn),
                                         version.version_id,
                                         status,
-                                        issue_dep.as_ref().map(|s| s.as_str()),
+                                        None,
                                         Some(&error),
                                         Some(&output),
+                                        duration,
                                     );
                                     update_process_status(
                                         Arc::clone(&conn),
@@ -141,6 +144,7 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                             }
                         }
                         Err(e) => {
+                            let duration = start_time.elapsed();
                             let e = if let Some(s) = e.downcast_ref::<String>() {
                                 s.as_str()
                             } else {
@@ -155,6 +159,7 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                 None,
                                 Some(format!("{:?}", e).as_str()),
                                 None,
+                                duration,
                             );
                             update_process_status(Arc::clone(&conn), version.version_id, "panic");
                         }
@@ -222,9 +227,10 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
                 r#"CREATE TABLE IF NOT EXISTS virt_audit_results(
                     version_id INT PRIMARY KEY,
                     result VARCHAR,
+                    rustv INT,
                     error  VARCHAR,
-                    issue_dep VARCHAR,
-                    output TEXT
+                    output TEXT,
+                    time_duration BIGINT
                 )"#
             ),
             &[],
@@ -244,16 +250,18 @@ fn store_audit_results(
     conn: Arc<Mutex<Client>>,
     version_id: i32,
     result: &str,
-    issue_dep: Option<&str>,
+    rustv: Option<i32>,
     error: Option<&str>,
     output: Option<&str>,
+    time_duration: std::time::Duration,
 ) {
+    let time_duration_secs = time_duration.as_secs() as i64;
     conn.lock()
     .unwrap()
     .query(
-        "INSERT INTO virt_audit_results(version_id, result, error, issue_dep, output) VALUES($1, $2, $3, $4, $5)
-        ON CONFLICT (version_id) DO UPDATE SET result = EXCLUDED.result, error = EXCLUDED.error, issue_dep = EXCLUDED.issue_dep, output = EXCLUDED.output",
-        &[&version_id, &result, &error, &issue_dep, &output],
+        "INSERT INTO virt_audit_results(version_id, result, rustv, error, output, time_duration) VALUES($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (version_id) DO UPDATE SET result = EXCLUDED.result, rustv = EXCLUDED.rustv, error = EXCLUDED.error, output = EXCLUDED.output, time_duration = EXCLUDED.time_duration",
+        &[&version_id, &result, &rustv, &error, &output, &time_duration_secs],
     ).unwrap();
 }
 

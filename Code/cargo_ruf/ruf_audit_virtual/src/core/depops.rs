@@ -8,11 +8,7 @@ use crate::basic::CondRufs;
 
 pub trait DepOps {
     /// Get all candidates of a package.
-    fn get_all_candidates(
-        &self,
-        name: &str,
-        req: VersionReq,
-    ) -> Result<FxHashMap<Version, CondRufs>, AuditError>;
+    fn get_all_candidates(&self, name: &str) -> Result<FxHashMap<Version, CondRufs>, AuditError>;
     /// Get the version requirements of a package.
     fn get_pkg_versionreq(
         &self,

@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use cargo_lock::dependency::graph::NodeIndex;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use petgraph::visit;
 use semver::Version;
 
@@ -15,10 +15,10 @@ pub fn audit(
     ver: &str,
     workspace: &str,
     debugger: &mut impl Write,
-) -> Result<(), AuditError> {
+) -> Result<u32, AuditError> {
     // Init a tree first
     let ops = DepOpsVirt::new(name, ver, workspace)?;
-    let deptree = DepTreeManager::new(ops, 63)?;
+    let mut deptree = DepTreeManager::new(ops, 63)?;
     let logical_root = deptree
         .get_graph()
         .neighbors(deptree.get_root())
@@ -33,13 +33,13 @@ pub fn audit(
 fn check_fix(
     mut deptree: DepTreeManager<DepOpsVirt>,
     debugger: &mut impl Write,
-) -> Result<(), AuditError> {
+) -> Result<u32, AuditError> {
     for rustc in (0..64).rev() {
         deptree.update_rustv(rustc);
         writeln!(
             debugger,
-            "[VirtAudit Debug] check_fix: Checking rustc version {}",
-            rustc
+            "[VirtAudit Debug] check_fix: Checking rustc version {}.",
+            rustc,
         )
         .unwrap();
         let issue_deps = check_issue(&deptree, debugger)?;
@@ -50,22 +50,27 @@ fn check_fix(
                 rustc
             )
             .unwrap();
-            return Ok(());
+            return Ok(rustc);
         }
 
-        if let Ok(fixes) = check_fixable(&deptree, issue_deps, debugger) {
-            if let Err(e) = try_fix(&mut deptree, fixes, debugger) {
+        let first_issue = issue_deps.first().unwrap().to_owned();
+        if let Ok(fixes) = check_fixable(&mut deptree, issue_deps, debugger) {
+            if let Err(e) = try_fix(
+                &mut deptree,
+                first_issue,
+                fixes.into_iter().next().unwrap(),
+                debugger,
+            ) {
                 writeln!(debugger,
                 "[VirtAudit Debug] check_fix: fix failure for rustc version {} with error: {:?}", rustc, e).unwrap();
             } else {
                 writeln!(
                     debugger,
-                    "[VirtAudit Debug] check_fix: Rustc version {} issues fixed, lockfile:\n{}",
+                    "[VirtAudit Debug] check_fix: Rustc version {} issues fixed.",
                     rustc,
-                    deptree.get_lockfile().unwrap()
                 )
                 .unwrap();
-                return Ok(());
+                return Ok(rustc);
             }
         } else {
             writeln!(
@@ -99,15 +104,15 @@ fn check_issue(
         let node = &graph[nx];
         let name_ver = format!("{}@{}", node.name, node.version);
         if let Some(rufs) = used_rufs.get(&name_ver) {
-            writeln!(
-                debugger,
-                "[VirtAudit Debug] check_issue: Checking ruf enabled package {}@{} rufs: {:?}",
-                node.name, node.version, rufs
-            )
-            .unwrap();
-            if !deptree.filter_rufs(rufs.iter().collect()).is_empty() {
+            let issue_rufs = deptree.filter_rufs(rufs.iter().collect());
+            if !issue_rufs.is_empty() {
                 // Ok here we got issues
-                // issue_dep = Some((nx, node.name.to_string(), node.version.to_string()));
+                writeln!(
+                    debugger,
+                    "[VirtAudit Debug] check_issue: Found issue package {}@{} rufs: {:?}",
+                    node.name, node.version, issue_rufs
+                )
+                .unwrap();
                 issue_deps.push(nx);
             }
         }
@@ -117,16 +122,35 @@ fn check_issue(
 }
 
 fn check_fixable(
-    deptree: &DepTreeManager<DepOpsVirt>,
+    deptree: &mut DepTreeManager<DepOpsVirt>,
     issue_deps: Vec<NodeIndex>,
     debugger: &mut impl Write,
 ) -> Result<Vec<FxHashMap<NodeIndex, Version>>, AuditError> {
+    let graph = deptree.get_graph();
     let mut fixes = Vec::new();
 
     // Check possible fix for each issue.
     for nx in issue_deps {
-        let res = deptree.issue_fixable(nx, debugger)?;
-        fixes.push(res);
+        match deptree.issue_fixable(nx, debugger) {
+            Ok(fix) => {
+                writeln!(
+                    debugger,
+                    "[VirtAudit Debug] check_fixable: Issue dep {}@{} is fixable.",
+                    graph[nx].name, graph[nx].version,
+                )
+                .unwrap();
+                fixes.push(fix);
+            }
+            Err(e) => {
+                writeln!(
+                    debugger,
+                    "[VirtAudit Debug] check_fixable: Issue dep {}@{} is not fixable with error {:?}.",
+                    graph[nx].name, graph[nx].version, e
+                )
+                .unwrap();
+                return Err(e);
+            }
+        }
     }
 
     Ok(fixes)
@@ -134,34 +158,39 @@ fn check_fixable(
 
 fn try_fix(
     deptree: &mut DepTreeManager<DepOpsVirt>,
-    fixes: Vec<FxHashMap<NodeIndex, Version>>,
+    first_issue: NodeIndex,
+    first_fix: FxHashMap<NodeIndex, Version>,
     debugger: &mut impl Write,
 ) -> Result<(), AuditError> {
+    // For loop detect.
+    let mut already_fixed = FxHashSet::default();
+
     {
         let graph = deptree.get_graph();
+        let mut fix = Vec::new();
 
-        let mut first_fix = Vec::new();
-        for (nx, fix) in fixes.first().unwrap() {
-            first_fix.push((
-                graph[*nx].name.to_string(),
-                graph[*nx].version.to_string(),
-                fix.to_string(),
+        for (nx, fix_ver) in first_fix {
+            fix.push((
+                graph[nx].name.to_string(),
+                graph[nx].version.to_string(),
+                fix_ver.to_string(),
             ));
         }
 
         writeln!(
             debugger,
             "[VirtAudit Debug] try_fix: Try fix {} with {:?}",
-            first_fix.last().unwrap().0,
-            first_fix
-                .iter()
+            graph[first_issue].name,
+            fix.iter()
                 .map(|(name, prev_ver, fix_ver)| format!("{}@{} -> {}", name, prev_ver, fix_ver))
                 .collect::<Vec<String>>()
         )
         .unwrap();
 
         // Apply the first fix.
-        deptree.update_pkg(first_fix)?;
+        deptree.update_pkgs(fix, debugger)?;
+
+        already_fixed.insert(first_issue);
     }
 
     // Since the tree has changed, the following fixes may not be valid, so we have to resolve the fix again.
@@ -177,7 +206,7 @@ fn try_fix(
         let fix = deptree.issue_fixable(issue_dep, debugger)?;
         assert!(!fix.is_empty(), "Fatal, no fix found when fixing issue.");
 
-        let fixes: Vec<(String, String, String)> = fix
+        let fix: Vec<(String, String, String)> = fix
             .into_iter()
             .map(|(nx, fix_ver)| {
                 (
@@ -191,15 +220,23 @@ fn try_fix(
         writeln!(
             debugger,
             "[VirtAudit Debug] try_fix: Try fix {} with {:?}",
-            fixes.last().unwrap().0,
-            fixes
-                .iter()
+            graph[issue_dep].name,
+            fix.iter()
                 .map(|(name, prev_ver, fix_ver)| format!("{}@{} -> {}", name, prev_ver, fix_ver))
                 .collect::<Vec<String>>()
         )
         .unwrap();
 
-        deptree.update_pkg(fixes)?;
+        deptree.update_pkgs(fix, debugger)?;
+
+        let check_loop = already_fixed.insert(issue_dep);
+
+        if !check_loop {
+            return Err(AuditError::FunctionError(
+                Some(format!("Dupfix, maybe a loop happens",)),
+                Some(issue_dep),
+            ));
+        }
     }
 }
 
@@ -212,12 +249,24 @@ fn test_audit() {
     let mut buffer = stdout.lock().unwrap();
 
     // let res = audit("taxonomy", "0.3.1", WORKSPACE_PATH, &mut *buffer);
-    let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
-    // let res: Result<(), AuditError> = audit("byte-enum-derive", "0.1.1", WORKSPACE_PATH, &mut *buffer);
+    // let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
+
+    // let res = audit(
+    //     "rustc-ap-rustc_errors",
+    //     "12.0.0",
+    //     WORKSPACE_PATH,
+    //     &mut *buffer,
+    // );
 
     // let res = audit("tar", "0.4.0", WORKSPACE_PATH, &mut *buffer);
     // let res = audit("chrono-tz", "0.1.0", WORKSPACE_PATH, &mut *buffer);
     // let res = audit("leaf", "0.0.1", WORKSPACE_PATH, &mut *buffer);
+
+    // We lack rustc-ap-rustc_expand infos.
+    // let res = audit("kunai", "0.3.0", WORKSPACE_PATH, &mut *buffer);
+    // let res = audit("hsr-codegen", "0.2.0", WORKSPACE_PATH, &mut *buffer);
+    // let res = audit("deuterium_orm", "0.5.0", WORKSPACE_PATH, &mut *buffer);
+    let res = audit("tari_comms_dht", "0.8.1", WORKSPACE_PATH, &mut *buffer);
 
     println!("RESULTS: {:?}", res);
 }

@@ -142,11 +142,7 @@ impl DepOpsVirt {
         Ok(version_id[0].get::<usize, i32>(0))
     }
 
-    fn get_cads_with_crate_name(
-        &self,
-        name: &str,
-        req: VersionReq,
-    ) -> Result<FxHashMap<Version, CondRufs>, String> {
+    fn get_cads_with_crate_name(&self, name: &str) -> Result<FxHashMap<Version, CondRufs>, String> {
         let rows = self
             .conn
             .lock()
@@ -155,18 +151,13 @@ impl DepOpsVirt {
                 "SELECT num, conds, feature FROM version_ruf WHERE name = $1",
                 &[&name],
             )
-            .map_err(|e| e.to_string())?;
+            .expect("Fatal, db query failed");
 
         let mut dep_rufs = FxHashMap::default();
         for row in rows {
             let ver = row.get::<_, String>(0);
             let ver = Version::parse(&ver)
                 .map_err(|e| format!("Version parse failure, invalid version: {} {}", ver, e))?;
-
-            // Version filter here.
-            if !req.matches(&ver) {
-                continue;
-            }
 
             let entry = dep_rufs.entry(ver).or_insert_with(CondRufs::empty);
 
@@ -196,7 +187,7 @@ impl DepOpsVirt {
                 "SELECT crate_name, req, kind FROM dependencies_with_name WHERE version_id = $1",
                 &[&version_id],
             )
-            .map_err(|e| e.to_string())?;
+            .expect("Fatal, db query failed");
 
         let mut dep_reqs = FxHashMap::default();
         for row in rows {
@@ -209,7 +200,9 @@ impl DepOpsVirt {
             if kind != 2 {
                 // FIXME: Shall we ignore the optional, target, etc on the dependencies ?
                 let check_dup = dep_reqs.insert(name.clone(), req);
-                assert!(check_dup.is_none(), "duplicated version reqs on {name}");
+                if let Some(dup) = check_dup {
+                    return Err(format!("duplicated version reqs on {dup}"));
+                }
             } // We DONOT care the dev dependencies.
         }
 
@@ -482,17 +475,13 @@ impl DepOpsVirt {
 }
 
 impl DepOps for DepOpsVirt {
-    fn get_all_candidates(
-        &self,
-        name: &str,
-        req: VersionReq,
-    ) -> Result<FxHashMap<Version, CondRufs>, AuditError> {
+    fn get_all_candidates(&self, name: &str) -> Result<FxHashMap<Version, CondRufs>, AuditError> {
         // Check locals first
         if self.locals.contains_key(name) {
             return Ok(FxHashMap::default());
         }
 
-        self.get_cads_with_crate_name(name, req)
+        self.get_cads_with_crate_name(name)
             .map_err(|e| AuditError::InnerError(e))
     }
 

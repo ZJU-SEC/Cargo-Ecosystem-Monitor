@@ -28,7 +28,11 @@ pub struct DepTreeManager<D: DepOps> {
     /// Store the max resolve tree.
     maxresolve: Rc<(Resolve, Tree, UsedRufs)>,
 
-    locals: RefCell<FxHashSet<String>>,
+    locals: FxHashSet<String>,
+
+    limited_candidates:
+        RefCell<FxHashMap<String, FxHashMap<Version, (CondRufs, FxHashMap<String, VersionReq>)>>>,
+    limited_fix: RefCell<FxHashMap<String, VersionReq>>,
 }
 
 impl<D: DepOps> DepTreeManager<D> {
@@ -45,7 +49,10 @@ impl<D: DepOps> DepTreeManager<D> {
             depresolve: resolve.clone(),
             maxresolve: resolve,
 
-            locals: RefCell::new(FxHashSet::default()),
+            locals: FxHashSet::default(),
+
+            limited_candidates: RefCell::new(FxHashMap::default()),
+            limited_fix: RefCell::new(FxHashMap::default()),
         })
     }
 
@@ -61,10 +68,9 @@ impl<D: DepOps> DepTreeManager<D> {
         self.depresolve.1.graph()
     }
 
-    pub fn set_local(&self, nx: &NodeIndex) {
+    pub fn set_local(&mut self, nx: &NodeIndex) {
         let node = &self.get_graph()[*nx];
         self.locals
-            .borrow_mut()
             .insert(format!("{}@{}", node.name, node.version));
     }
 
@@ -77,7 +83,6 @@ impl<D: DepOps> DepTreeManager<D> {
     pub fn is_local(&self, nx: &NodeIndex) -> bool {
         let node = &self.get_graph()[*nx];
         self.locals
-            .borrow()
             .contains(&format!("{}@{}", node.name, node.version))
     }
 
@@ -86,7 +91,27 @@ impl<D: DepOps> DepTreeManager<D> {
     }
 
     /// Update packages in the dependency tree.
-    pub fn update_pkg(&mut self, updates: Vec<(String, String, String)>) -> Result<(), AuditError> {
+    pub fn update_pkgs(
+        &mut self,
+        updates: Vec<(String, String, String)>,
+        debugger: &mut impl Write,
+    ) -> Result<(), AuditError> {
+        // Updates limits on fix.
+        let mut limited_fix_mut = self.limited_fix.borrow_mut();
+        for (name, _, fix_ver) in &updates {
+            let req = VersionReq::parse(&format!("<={fix_ver}")).unwrap();
+            limited_fix_mut.insert(name.clone(), req);
+        }
+        writeln!(
+            debugger,
+            "[Deptree Debug] update_pkgs: updates limited_fix {:?}",
+            limited_fix_mut
+                .iter()
+                .map(|(k, req)| format!("{}: {}", k, req))
+                .collect::<Vec<_>>()
+        )
+        .unwrap();
+
         let (resolve, tree) = self.depops.update_resolve(&self.depresolve.0, updates)?;
         let used_rufs = self.depops.extract_rufs(&resolve)?;
 
@@ -98,8 +123,9 @@ impl<D: DepOps> DepTreeManager<D> {
     /// Update rust version configs.
     pub fn update_rustv(&mut self, rustv: u32) {
         self.rustv = rustv;
-        // Restore the max tree.
+        // Restore the max tree and fix limitations.
         self.depresolve = self.maxresolve.clone();
+        self.limited_fix.borrow_mut().clear();
     }
 
     /// This function will check whether the issue is fixable under current configs.
@@ -113,18 +139,43 @@ impl<D: DepOps> DepTreeManager<D> {
         let dep_name = dep.name.to_string();
         let dep_ver = dep.version.to_string();
 
+        writeln!(
+            debugger,
+            "[Deptree Debug] issue_fixable: check {}@{} fixibility",
+            dep_name, dep_ver
+        )
+        .unwrap();
+
         // If local, no version fix of course.
         if self.is_local(&issue_nx) {
-            return Err(AuditError::FunctionError(None, None));
+            return Err(AuditError::FunctionError(
+                Some("local crate has no candidates".to_string()),
+                Some(issue_nx),
+            ));
         }
+
+        // Prepare candidates.
+        self.prepare_limited_candidates(issue_nx, debugger)?;
+
+        let limited_candidates_borrow = self.limited_candidates.borrow();
 
         let mut fix = FxHashMap::default();
         // 1. Check direct fixable first.
-        let req = VersionReq::parse("*").map_err(|e| AuditError::InnerError(e.to_string()))?;
-        let candidates = self.depops.get_all_candidates(&dep_name, req).unwrap();
-        assert!(!candidates.is_empty(), "Fatal, not any candidates found");
+        let candidates = limited_candidates_borrow.get(&dep_name).unwrap();
+        if candidates.is_empty() {
+            return Err(AuditError::InnerError(format!(
+                "no candidates found for {}, maybe db errors",
+                dep_name
+            )));
+        }
 
-        let ruf_ok_candidates = self.get_ruf_ok_candidates(&dep_name, &dep_ver, &candidates)?;
+        let limits_on_candidates = self.limited_fix.borrow().get(&dep_name).cloned();
+        let candidates = candidates
+            .into_iter()
+            .filter(|(v, _)| Self::limited_fix_filter(v, &limits_on_candidates))
+            .map(|(k, v)| (k, &v.0));
+
+        let ruf_ok_candidates = self.get_ruf_ok_candidates(&dep_name, &dep_ver, candidates)?;
         writeln!(
             debugger,
             "[Deptree Debug] issue_fixable: direct check, ruf_ok_candidates {:?}",
@@ -134,11 +185,6 @@ impl<D: DepOps> DepTreeManager<D> {
                 .collect::<Vec<_>>()
         )
         .unwrap();
-
-        // Ok this can not be fixed.
-        if ruf_ok_candidates.is_empty() {
-            return Err(AuditError::FunctionError(None, None));
-        }
 
         // And here we check whether these ruf-oks are acceptable by parents.
         let req_ok_candidates = self.get_req_ok_candidates(issue_nx, &ruf_ok_candidates)?;
@@ -159,13 +205,18 @@ impl<D: DepOps> DepTreeManager<D> {
 
         // 2. Or we have to check the parents.
         // The main idea is to find usable parents that accept the ruf-ok childs.
+        let ruf_ok_candidates = ruf_ok_candidates
+            .into_iter()
+            .map(|v| Some(v))
+            .chain(vec![None]);
         for usable_child in ruf_ok_candidates {
-            let mut chain = self.get_req_ok_parents(issue_nx, usable_child, debugger)?;
-            if !chain.is_empty() {
-                chain.push((issue_nx, usable_child.clone()));
+            if let Ok(mut chain) = self.get_req_ok_parents(issue_nx, usable_child, debugger) {
+                if let Some(child) = usable_child {
+                    chain.push((issue_nx, child.clone()));
+                }
                 writeln!(
                     debugger,
-                    "[Deptree Debug] issue_fixable: parent chain check, chain {:?}",
+                    "[Deptree Debug] issue_fixable: found usable chain {:?}",
                     chain
                         .iter()
                         .map(|(nx, ver)| format!(
@@ -177,23 +228,41 @@ impl<D: DepOps> DepTreeManager<D> {
                         .collect::<Vec<_>>()
                 )
                 .unwrap();
+
+                let mut check_dup = None;
                 for (p, ver) in chain {
-                    let check_dup = fix.insert(p, ver);
-                    assert!(check_dup.is_none(), "Fatal, duplicate parent fix found");
+                    check_dup = fix.insert(p, ver);
+                    if check_dup.is_some() {
+                        break;
+                    }
                 }
 
-                return Ok(fix);
+                if check_dup.is_some() {
+                    // This can be a really complex issue, currently we ignore it.
+                    writeln!(debugger,
+                        "[Deptree Debug] issue_fixable: multiple fix on parent found when choose child {}@{}",
+                        dep_name, usable_child.map(|v| v.to_string()).unwrap_or("None".to_string())
+                    ).unwrap();
+
+                    fix.clear();
+                    continue;
+                } else {
+                    return Ok(fix);
+                }
             } else {
                 writeln!(
                     debugger,
                     "[Deptree Debug] issue_fixable: parent chain check, chain empty when choose child {}@{}",
-                    dep_name, usable_child
+                    dep_name, usable_child.map(|v| v.to_string()).unwrap_or("None".to_string())
                 )
                 .unwrap();
             }
         }
 
-        return Err(AuditError::FunctionError(None, None));
+        return Err(AuditError::FunctionError(
+            Some("no usable parent chain found".to_string()),
+            Some(issue_nx),
+        ));
     }
 
     /// Find candidates free from ruf issues under current configs, the returned candidates are sorted by version.
@@ -201,7 +270,7 @@ impl<D: DepOps> DepTreeManager<D> {
         &self,
         pkg_name: &str,
         pkg_ver: &str,
-        candidates: &'ctx FxHashMap<Version, CondRufs>,
+        candidates: impl Iterator<Item = (&'ctx Version, &'ctx CondRufs)>,
     ) -> Result<Vec<&'ctx Version>, AuditError> {
         let mut usable = Vec::new();
         for (ver, condrufs) in candidates.into_iter() {
@@ -231,17 +300,20 @@ impl<D: DepOps> DepTreeManager<D> {
         let graph = self.get_graph();
         let pkg_name = graph[pkg_nx].name.as_str();
         let parents = self.get_parents(pkg_nx);
+        let limited_candidates_borrow = self.limited_candidates.borrow();
 
         // Collect parents' version req on current package.
         let mut version_reqs = Vec::new();
         for p in parents {
             let p_pkg = &graph[p];
-            let p_name = p_pkg.name.as_str();
-            let p_ver = p_pkg.version.to_string();
 
-            let mut meta = self.depops.get_pkg_versionreq(p_name, &p_ver)?;
-            let req = meta
-                .remove(pkg_name)
+            let (_, meta_reqs) = limited_candidates_borrow
+                .get(p_pkg.name.as_str())
+                .unwrap()
+                .get(&p_pkg.version)
+                .unwrap();
+            let req = meta_reqs
+                .get(pkg_name)
                 .expect("Fatal, cannot find dependency in parent package");
 
             version_reqs.push((p, req));
@@ -260,32 +332,52 @@ impl<D: DepOps> DepTreeManager<D> {
     fn get_req_ok_parents(
         &self,
         child_nx: NodeIndex,
-        child: &Version,
+        child: Option<&Version>,
         debugger: &mut impl Write,
     ) -> Result<Vec<(NodeIndex, Version)>, AuditError> {
         let parents = self.get_parents(child_nx);
-        let mut fix = Vec::new();
-
+        let limited_candidates_borrow = self.limited_candidates.borrow();
         let graph = self.get_graph();
+        let mut fix = Vec::new();
 
         for p in parents {
             writeln!(
                 debugger,
-                "[Deptree Debug] get_req_ok_parents: check parent {} - child {}@{}",
+                "[Deptree Debug] get_req_ok_parents: check parent {}@{} - child {}@{}",
                 graph[p].name,
+                graph[p].version,
                 graph[child_nx].name,
-                child.to_string()
+                child.map(|v| v.to_string()).unwrap_or("None".to_string())
             )
             .unwrap();
             if self.is_local(&p) {
-                // Ok locals reached, no more version can be changed.
-                return Err(AuditError::FunctionError(None, None));
+                // local reached, we check whether this child is acceptable or not.
+                if child.is_none() {
+                    // Of course locals cannot remove this child.
+                    return Err(AuditError::FunctionError(None, None));
+                }
+
+                let (_, meta_reqs) = limited_candidates_borrow
+                    .get(graph[p].name.as_str())
+                    .unwrap()
+                    .get(&graph[p].version)
+                    .unwrap();
+
+                let req = meta_reqs
+                    .get(graph[child_nx].name.as_str())
+                    .expect("Fatal, cannot find dependency in parent package");
+
+                if req.matches(child.unwrap()) {
+                    return Ok(fix);
+                } else {
+                    return Err(AuditError::FunctionError(None, None));
+                }
             }
 
             let req_ok_parents = self.get_req_ok_parent(p, child_nx, child)?;
             writeln!(
                 debugger,
-                "[Deptree Debug] get_req_ok_parents: parent {} req_ok_parents {:?}",
+                "[Deptree Debug] get_req_ok_parents: parent {} req_ok {:?}",
                 graph[p].name,
                 req_ok_parents
                     .iter()
@@ -307,17 +399,17 @@ impl<D: DepOps> DepTreeManager<D> {
             } else {
                 // Or we still need to go up, try from latest req_ok_parents.
                 for req_ok_p in req_ok_parents {
-                    if let Ok(chain) = self.get_req_ok_parents(p, &req_ok_p, debugger) {
-                        writeln!(
-                            debugger,
-                            "[Deptree Debug] get_req_ok_parents: parent {} chain {:?}",
-                            graph[p].name,
-                            chain
-                                .iter()
-                                .map(|(nx, ver)| format!("{}-{}", graph[*nx].name, ver))
-                                .collect::<Vec<_>>()
-                        )
-                        .unwrap();
+                    if let Ok(chain) = self.get_req_ok_parents(p, Some(&req_ok_p), debugger) {
+                        // writeln!(
+                        //     debugger,
+                        //     "[Deptree Debug] get_req_ok_parents: parent {} chain {:?}",
+                        //     graph[p].name,
+                        //     chain
+                        //         .iter()
+                        //         .map(|(nx, ver)| format!("{}-{}", graph[*nx].name, ver))
+                        //         .collect::<Vec<_>>()
+                        // )
+                        // .unwrap();
                         fix.extend(chain);
                         fix.push((p, req_ok_p));
                         break;
@@ -338,7 +430,7 @@ impl<D: DepOps> DepTreeManager<D> {
         &self,
         parent_nx: NodeIndex,
         child_nx: NodeIndex,
-        child: &Version,
+        child: Option<&Version>,
     ) -> Result<Vec<Version>, AuditError> {
         let graph = self.get_graph();
         let parent_pkg = &graph[parent_nx];
@@ -348,29 +440,35 @@ impl<D: DepOps> DepTreeManager<D> {
         let child_pkg = &graph[child_nx];
         let child_name = child_pkg.name.as_str();
 
-        let req = VersionReq::parse(&format!("<={}", parent_ver))
-            .map_err(|e| AuditError::InnerError(e.to_string()))?;
-        let parent_candidates = self.depops.get_all_candidates(parent_name, req)?;
+        let limited_candidates_borrow = self.limited_candidates.borrow();
+
+        let parent_candidates = limited_candidates_borrow.get(parent_name).unwrap();
+        let limits_on_candidates = self.limited_fix.borrow().get(parent_name).cloned();
+        let parent_candidates_iter = parent_candidates
+            .into_iter()
+            .filter(|(v, _)| Self::limited_fix_filter(v, &limits_on_candidates))
+            .map(|(k, v)| (k, &v.0));
+
         let ruf_ok_candidates =
-            self.get_ruf_ok_candidates(&parent_name, &parent_ver, &parent_candidates)?;
-        assert!(
-            !ruf_ok_candidates.is_empty(),
-            "Fatal, not any parent ruf_ok_candidates found"
-        );
+            self.get_ruf_ok_candidates(&parent_name, &parent_ver, parent_candidates_iter)?;
 
         let mut usable = Vec::new();
-
         for p in ruf_ok_candidates {
-            let mut meta = self
-                .depops
-                .get_pkg_versionreq(parent_name, p.to_string().as_str())?;
-            if let Some(req) = meta.remove(child_name) {
-                if req.matches(child) {
+            let (_, meta_reqs) = parent_candidates.get(&p).unwrap();
+            if let Some(child) = child {
+                if let Some(req) = meta_reqs.get(child_name) {
+                    if req.matches(child) {
+                        usable.push(p.clone());
+                    }
+                } else {
+                    // The parent nolonger need this child dep, so ok.
                     usable.push(p.clone());
                 }
             } else {
-                // The parent nolonger need this child dep, so ok.
-                usable.push(p.clone());
+                if meta_reqs.get(child_name).is_none() {
+                    // Here we only want nonreq parents.
+                    usable.push(p.clone());
+                }
             }
         }
 
@@ -385,5 +483,240 @@ impl<D: DepOps> DepTreeManager<D> {
             .edges_directed(depnx, EdgeDirection::Incoming)
             .map(|edge| edge.source())
             .collect()
+    }
+
+    /// Focus on possible candiates, not all candidates.
+    fn prepare_limited_candidates(
+        &self,
+        pkg_nx: NodeIndex,
+        debugger: &mut impl Write,
+    ) -> Result<(), AuditError> {
+        let graph = self.get_graph();
+        let pkg = &graph[pkg_nx];
+        let pkg_name = pkg.name.to_string();
+
+        assert!(
+            !self.is_local(&pkg_nx),
+            "Fatal, cannot prepare local candidates"
+        );
+
+        if self
+            .limited_candidates
+            .borrow()
+            .get(pkg.name.as_str())
+            .is_some()
+        {
+            writeln!(
+                debugger,
+                "[Deptree Debug] prepare_limited_candidates: prepare candidates {}, it's already done.",
+                pkg_name
+            )
+            .unwrap();
+            return Ok(());
+        }
+
+        // writeln!(
+        //     debugger,
+        //     "[Deptree Debug] prepare_limited_candidates: prepare candidates {}.",
+        //     pkg_name
+        // )
+        // .unwrap();
+
+        // Or we got to prepare it, along with all its parents, up to the locals.
+        let mut possible_candidates = self.depops.get_all_candidates(&pkg_name)?;
+        let parents = self.get_parents(pkg_nx);
+        for p in parents {
+            let reqs = self
+                .prepare_limited_parents(p, pkg_nx, debugger)?
+                .into_iter()
+                .collect::<FxHashSet<VersionReq>>();
+
+            possible_candidates = possible_candidates
+                .into_iter()
+                .filter(|(k, _)| reqs.iter().any(|req| req.matches(k)))
+                .collect();
+
+            writeln!(
+                debugger,
+                "[Deptree Debug] prepare_limited_candidates: parent {} reqs {:?}.",
+                graph[p].name,
+                reqs.iter().map(|req| req.to_string()).collect::<Vec<_>>(),
+            )
+            .unwrap();
+        }
+
+        let mut datas = FxHashMap::default();
+        for (candidate, condrufs) in possible_candidates {
+            let meta_reqs = match self
+                .depops
+                .get_pkg_versionreq(&pkg_name, &candidate.to_string())
+            {
+                Ok(reqs) => reqs,
+                Err(_e) => {
+                    // writeln!(
+                    //     debugger,
+                    //     "[Deptree Debug] prepare_limited_candidates: {}@{} get reqs failed with error {:?}.",
+                    //     pkg_name, candidate, e
+                    // )
+                    // .unwrap();
+                    continue;
+                }
+            };
+
+            datas.insert(candidate, (condrufs, meta_reqs));
+        }
+
+        writeln!(
+            debugger,
+            "[Deptree Debug] prepare_limited_candidates: possible candidates for {pkg_name} {:?}",
+            datas.keys().map(|v| v.to_string()).collect::<Vec<String>>()
+        )
+        .unwrap();
+
+        self.limited_candidates.borrow_mut().insert(pkg_name, datas);
+
+        Ok(())
+    }
+
+    fn prepare_limited_parents(
+        &self,
+        parent_nx: NodeIndex,
+        child_nx: NodeIndex,
+        debugger: &mut impl Write,
+    ) -> Result<Vec<VersionReq>, AuditError> {
+        let graph = self.get_graph();
+        let parent_pkg = &graph[parent_nx];
+        let parent_name = parent_pkg.name.to_string();
+        let parent_ver = parent_pkg.version.to_string();
+        let child_pkg = &graph[child_nx];
+
+        writeln!(
+            debugger,
+            "[Deptree Debug] prepare_limited_parents: prepare parents {} for child {}.",
+            parent_name, child_pkg.name
+        )
+        .unwrap();
+
+        if self.is_local(&parent_nx) {
+            let meta_reqs = self.depops.get_pkg_versionreq(&parent_name, &parent_ver)?;
+            let mut datas = FxHashMap::default();
+
+            let req = meta_reqs
+                .get(child_pkg.name.as_str())
+                .cloned()
+                .expect("Fatal, cannot find dependency in parent package");
+
+            datas.insert(parent_pkg.version.clone(), (CondRufs::empty(), meta_reqs));
+
+            writeln!(
+                debugger,
+                "[Deptree Debug] prepare_limited_parents: it's local parent {}@{} with req {}.",
+                parent_name, parent_ver, req
+            )
+            .unwrap();
+
+            self.limited_candidates
+                .borrow_mut()
+                .insert(parent_name, datas);
+
+            return Ok(vec![req]);
+        }
+
+        if let Some(versions) = self.limited_candidates.borrow().get(&parent_name) {
+            // Already prepared.
+            let mut all_reqs = Vec::new();
+
+            for (_, (_, meta_reqs)) in versions.iter() {
+                if let Some(req) = meta_reqs.get(child_pkg.name.as_str()) {
+                    all_reqs.push(req.clone());
+                } else {
+                    all_reqs.push(VersionReq::STAR);
+                }
+            }
+
+            writeln!(
+                debugger,
+                "[Deptree Debug] prepare_limited_parents: parent {} already prepared.",
+                parent_name,
+            )
+            .unwrap();
+
+            return Ok(all_reqs);
+        }
+
+        // Prepare the parent candidates.
+        let mut possible_parent_candidates = self.depops.get_all_candidates(&parent_name)?;
+
+        let parent_parents = self.get_parents(parent_nx);
+        for parent_parent in parent_parents {
+            let reqs = self
+                .prepare_limited_parents(parent_parent, parent_nx, debugger)?
+                .into_iter()
+                .collect::<FxHashSet<VersionReq>>();
+
+            possible_parent_candidates = possible_parent_candidates
+                .into_iter()
+                .filter(|(k, _)| reqs.iter().any(|req| req.matches(&k)))
+                .collect();
+
+            writeln!(
+                debugger,
+                "[Deptree Debug] prepare_limited_parents: parent {}'s parent {} reqs {:?}.",
+                parent_name,
+                graph[parent_parent].name,
+                reqs.iter().map(|req| req.to_string()).collect::<Vec<_>>()
+            )
+            .unwrap();
+        }
+
+        let mut datas = FxHashMap::default();
+        let mut all_reqs = Vec::new();
+        for (parent_candidate, condrufs) in possible_parent_candidates {
+            let meta_reqs = match self
+                .depops
+                .get_pkg_versionreq(&parent_name, &parent_candidate.to_string())
+            {
+                Ok(reqs) => reqs,
+                Err(_e) => {
+                    // writeln!(
+                    //     debugger,
+                    //     "[Deptree Debug] prepare_limited_parents: parent {}@{} get reqs failed with error {:?}.",
+                    //     parent_name, parent_candidate, e
+                    // )
+                    // .unwrap();
+                    continue;
+                }
+            };
+
+            if let Some(req) = meta_reqs.get(child_pkg.name.as_str()) {
+                all_reqs.push(req.clone());
+            } else {
+                all_reqs.push(VersionReq::STAR);
+            }
+
+            datas.insert(parent_candidate, (condrufs, meta_reqs));
+        }
+
+        writeln!(
+            debugger,
+            "[Deptree Debug] prepare_limited_parents: possible parent candidates for {} {:?}",
+            parent_name,
+            datas.keys().map(|v| v.to_string()).collect::<Vec<String>>()
+        )
+        .unwrap();
+
+        self.limited_candidates
+            .borrow_mut()
+            .insert(parent_name, datas);
+
+        Ok(all_reqs)
+    }
+
+    fn limited_fix_filter(v: &Version, limit: &Option<VersionReq>) -> bool {
+        if let Some(limit) = limit {
+            limit.matches(v)
+        } else {
+            true
+        }
     }
 }
