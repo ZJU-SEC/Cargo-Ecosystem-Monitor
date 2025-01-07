@@ -17,14 +17,16 @@
 */
 
 use std::{
+    any::Any,
     env::current_dir,
     fs::File,
     panic,
     sync::{Arc, Mutex},
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
+use async_std::future::timeout;
 use crossbeam::channel;
 use log::{error, info};
 use postgres::{Client, NoTls};
@@ -89,61 +91,51 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                     let output = Arc::new(Mutex::new(Vec::new()));
 
                     let start_time = Instant::now();
-                    match panic::catch_unwind(|| {
-                        audit(
-                            &version.name,
-                            &version.num,
-                            workspace_str,
-                            &mut *output.lock().unwrap(),
-                        )
-                    }) {
-                        Ok(audit_result) => {
+                    match async_std::task::block_on(limited_audit(
+                        &version.name,
+                        &version.num,
+                        workspace_str,
+                        Arc::clone(&output),
+                    )) {
+                        Ok(Ok(Ok(rustv))) => {
                             let duration = start_time.elapsed();
-                            info!("[{}] Done auditing: {}@{}", i, &version.name, &version.num);
                             let output = String::from_utf8(output.lock().unwrap().to_vec())
                                 .expect("cannot convert output to string");
-                            match audit_result {
-                                Ok(rustv) => {
-                                    store_audit_results(
-                                        Arc::clone(&conn),
-                                        version.version_id,
-                                        "success",
-                                        Some(rustv as i32),
-                                        None,
-                                        Some(&output),
-                                        duration,
-                                    );
-                                    update_process_status(
-                                        Arc::clone(&conn),
-                                        version.version_id,
-                                        "done",
-                                    );
-                                }
-                                Err(e) => {
-                                    let (status, error) = match e {
-                                        AuditError::InnerError(error) => ("inner fail", error),
-                                        AuditError::FunctionError(_, _) => {
-                                            ("fix fail", "all methods failed".to_string())
-                                        }
-                                    };
-                                    store_audit_results(
-                                        Arc::clone(&conn),
-                                        version.version_id,
-                                        status,
-                                        None,
-                                        Some(&error),
-                                        Some(&output),
-                                        duration,
-                                    );
-                                    update_process_status(
-                                        Arc::clone(&conn),
-                                        version.version_id,
-                                        status,
-                                    );
-                                }
-                            }
+                            store_audit_results(
+                                Arc::clone(&conn),
+                                version.version_id,
+                                "success",
+                                Some(rustv as i32),
+                                None,
+                                Some(&output),
+                                duration,
+                            );
+                            update_process_status(Arc::clone(&conn), version.version_id, "done");
+
+                            info!("[{}] Done auditing: {}@{}", i, &version.name, &version.num);
                         }
-                        Err(e) => {
+                        Ok(Ok(Err(e))) => {
+                            let duration = start_time.elapsed();
+                            let (status, error) = match e {
+                                AuditError::InnerError(error) => ("inner fail", error),
+                                AuditError::FunctionError(_, _) => {
+                                    ("fix fail", "all methods failed".to_string())
+                                }
+                            };
+                            let output = String::from_utf8(output.lock().unwrap().to_vec())
+                                .expect("cannot convert output to string");
+                            store_audit_results(
+                                Arc::clone(&conn),
+                                version.version_id,
+                                status,
+                                None,
+                                Some(&error),
+                                Some(&output),
+                                duration,
+                            );
+                            update_process_status(Arc::clone(&conn), version.version_id, status);
+                        }
+                        Ok(Err(e)) => {
                             let duration = start_time.elapsed();
                             let e = if let Some(s) = e.downcast_ref::<String>() {
                                 s.as_str()
@@ -151,17 +143,31 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                 "Uncatched panic"
                             };
 
-                            error!("[{}] audit panic: {:?}", i, e);
                             store_audit_results(
                                 Arc::clone(&conn),
                                 version.version_id,
                                 "panic",
                                 None,
-                                Some(format!("{:?}", e).as_str()),
+                                Some(e),
                                 None,
                                 duration,
                             );
+
+                            error!("[{}] audit panic: {:?}", i, e);
                             update_process_status(Arc::clone(&conn), version.version_id, "panic");
+                        }
+                        Err(_) => {
+                            let duration = start_time.elapsed();
+                            store_audit_results(
+                                Arc::clone(&conn),
+                                version.version_id,
+                                "timeout",
+                                None,
+                                None,
+                                None,
+                                duration,
+                            );
+                            update_process_status(Arc::clone(&conn), version.version_id, "timeout");
                         }
                     }
                 }
@@ -273,4 +279,22 @@ fn update_process_status(conn: Arc<Mutex<Client>>, version_id: i32, status: &str
             &[&status, &version_id],
         )
         .expect("cannot update process status");
+}
+
+async fn limited_audit(
+    name: &str,
+    ver: &str,
+    workspace: &str,
+    output: Arc<Mutex<Vec<u8>>>,
+) -> Result<Result<Result<u32, AuditError>, Box<dyn Any + Send>>, ()> {
+    let result = timeout(Duration::from_secs(5 * 60), async {
+        panic::catch_unwind(|| audit(name, ver, workspace, &mut *output.lock().unwrap()))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(res)) => Ok(Ok(res)),
+        Ok(Err(e)) => Ok(Err(e)),
+        Err(_) => Err(()), // Time out
+    }
 }

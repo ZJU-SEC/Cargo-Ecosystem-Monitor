@@ -30,8 +30,15 @@ pub struct DepTreeManager<D: DepOps> {
 
     locals: FxHashSet<String>,
 
-    limited_candidates:
-        RefCell<FxHashMap<String, FxHashMap<Version, (CondRufs, FxHashMap<String, VersionReq>)>>>,
+    limited_candidates: RefCell<
+        FxHashMap<
+            String,
+            (
+                FxHashSet<Version>,
+                FxHashMap<Version, (CondRufs, FxHashMap<String, VersionReq>)>,
+            ),
+        >,
+    >,
     limited_fix: RefCell<FxHashMap<String, VersionReq>>,
 }
 
@@ -161,7 +168,7 @@ impl<D: DepOps> DepTreeManager<D> {
 
         let mut fix = FxHashMap::default();
         // 1. Check direct fixable first.
-        let candidates = limited_candidates_borrow.get(&dep_name).unwrap();
+        let candidates = &limited_candidates_borrow.get(&dep_name).unwrap().1;
         if candidates.is_empty() {
             return Err(AuditError::InnerError(format!(
                 "no candidates found for {}, maybe db errors",
@@ -310,6 +317,7 @@ impl<D: DepOps> DepTreeManager<D> {
             let (_, meta_reqs) = limited_candidates_borrow
                 .get(p_pkg.name.as_str())
                 .unwrap()
+                .1
                 .get(&p_pkg.version)
                 .unwrap();
             let req = meta_reqs
@@ -360,6 +368,7 @@ impl<D: DepOps> DepTreeManager<D> {
                 let (_, meta_reqs) = limited_candidates_borrow
                     .get(graph[p].name.as_str())
                     .unwrap()
+                    .1
                     .get(&graph[p].version)
                     .unwrap();
 
@@ -442,7 +451,7 @@ impl<D: DepOps> DepTreeManager<D> {
 
         let limited_candidates_borrow = self.limited_candidates.borrow();
 
-        let parent_candidates = limited_candidates_borrow.get(parent_name).unwrap();
+        let parent_candidates = &limited_candidates_borrow.get(parent_name).unwrap().1;
         let limits_on_candidates = self.limited_fix.borrow().get(parent_name).cloned();
         let parent_candidates_iter = parent_candidates
             .into_iter()
@@ -504,12 +513,12 @@ impl<D: DepOps> DepTreeManager<D> {
             .limited_candidates
             .borrow()
             .get(pkg.name.as_str())
-            .is_some()
+            .is_some_and(|info| info.0.get(&pkg.version).is_some())
         {
             writeln!(
                 debugger,
-                "[Deptree Debug] prepare_limited_candidates: prepare candidates {}, it's already done.",
-                pkg_name
+                "[Deptree Debug] prepare_limited_candidates: prepare candidates {}@{}, it's already done.",
+                pkg_name, pkg.version
             )
             .unwrap();
             return Ok(());
@@ -545,6 +554,11 @@ impl<D: DepOps> DepTreeManager<D> {
             .unwrap();
         }
 
+        let mut limited_candidates_borrow_mut = self.limited_candidates.borrow_mut();
+        let entry = limited_candidates_borrow_mut
+            .entry(pkg_name.clone())
+            .or_insert((FxHashSet::default(), FxHashMap::default()));
+
         let mut datas = FxHashMap::default();
         for (candidate, condrufs) in possible_candidates {
             let meta_reqs = match self
@@ -573,7 +587,8 @@ impl<D: DepOps> DepTreeManager<D> {
         )
         .unwrap();
 
-        self.limited_candidates.borrow_mut().insert(pkg_name, datas);
+        entry.0.insert(pkg.version.clone());
+        entry.1.extend(datas);
 
         Ok(())
     }
@@ -615,33 +630,38 @@ impl<D: DepOps> DepTreeManager<D> {
             )
             .unwrap();
 
+            let mut versions = FxHashSet::default();
+            versions.insert(parent_pkg.version.clone());
+
             self.limited_candidates
                 .borrow_mut()
-                .insert(parent_name, datas);
+                .insert(parent_name, (versions, datas));
 
             return Ok(vec![req]);
         }
 
-        if let Some(versions) = self.limited_candidates.borrow().get(&parent_name) {
-            // Already prepared.
-            let mut all_reqs = Vec::new();
+        if let Some((versions, datas)) = self.limited_candidates.borrow().get(&parent_name) {
+            if let Some(_) = versions.get(&parent_pkg.version) {
+                // Already prepared.
+                let mut all_reqs = Vec::new();
 
-            for (_, (_, meta_reqs)) in versions.iter() {
-                if let Some(req) = meta_reqs.get(child_pkg.name.as_str()) {
-                    all_reqs.push(req.clone());
-                } else {
-                    all_reqs.push(VersionReq::STAR);
+                for (_, (_, meta_reqs)) in datas.iter() {
+                    if let Some(req) = meta_reqs.get(child_pkg.name.as_str()) {
+                        all_reqs.push(req.clone());
+                    } else {
+                        all_reqs.push(VersionReq::STAR);
+                    }
                 }
+
+                writeln!(
+                    debugger,
+                    "[Deptree Debug] prepare_limited_parents: parent {} already prepared.",
+                    parent_name,
+                )
+                .unwrap();
+
+                return Ok(all_reqs);
             }
-
-            writeln!(
-                debugger,
-                "[Deptree Debug] prepare_limited_parents: parent {} already prepared.",
-                parent_name,
-            )
-            .unwrap();
-
-            return Ok(all_reqs);
         }
 
         // Prepare the parent candidates.
@@ -668,6 +688,11 @@ impl<D: DepOps> DepTreeManager<D> {
             )
             .unwrap();
         }
+
+        let mut limited_candidates_borrow_mut = self.limited_candidates.borrow_mut();
+        let entry = limited_candidates_borrow_mut
+            .entry(parent_name.clone())
+            .or_insert((FxHashSet::default(), FxHashMap::default()));
 
         let mut datas = FxHashMap::default();
         let mut all_reqs = Vec::new();
@@ -705,9 +730,8 @@ impl<D: DepOps> DepTreeManager<D> {
         )
         .unwrap();
 
-        self.limited_candidates
-            .borrow_mut()
-            .insert(parent_name, datas);
+        entry.0.insert(parent_pkg.version.clone());
+        entry.1.extend(datas);
 
         Ok(all_reqs)
     }

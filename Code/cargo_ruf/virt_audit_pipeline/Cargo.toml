@@ -8,4 +8,5 @@ crossbeam = "0.8.4"
 log = "0.4.22"
 postgres = "0.19.9"
 simplelog = "0.12.2"
+async-std = "1.13.0"
 ruf_audit_virtual = { path = "../ruf_audit_virtual" }
