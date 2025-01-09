@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
@@ -63,6 +64,10 @@ pub struct DepOpsVirt {
 
     /// The local crates.
     locals: FxHashMap<String, FxHashMap<String, VersionReq>>,
+
+    /// Caches.
+    cads_cache: RefCell<FxHashMap<String, FxHashMap<Version, CondRufs>>>,
+    reqs_cache: RefCell<FxHashMap<String, FxHashMap<String, VersionReq>>>,
 }
 
 impl DepOpsVirt {
@@ -97,6 +102,9 @@ impl DepOpsVirt {
             toml_path: toml_path,
 
             locals: locals,
+
+            cads_cache: RefCell::new(FxHashMap::default()),
+            reqs_cache: RefCell::new(FxHashMap::default()),
         };
 
         Ok(uninit)
@@ -552,19 +560,16 @@ impl DepOpsVirt {
         pkg_feature: &[InternedString],
     ) -> Result<Vec<String>, String> {
         let mut rufs = FxHashSet::default();
-        let rows = self
-            .conn
-            .lock()
-            .unwrap()
-            .query(
-                "SELECT conds, feature FROM version_ruf WHERE name = $1 AND num = $2 and feature != 'no_feature_used'",
-                &[&name, &ver],
-            )
-            .map_err(|e| e.to_string())?;
+        let ver = Version::parse(ver).unwrap();
+        let condrufs = self
+            .get_cads_with_crate_name(name)?
+            .get(&ver)
+            .ok_or(format!("{name}@{ver} cond rufs not found"))?
+            .clone();
 
-        for row in rows {
-            let cond = row.get::<usize, Option<String>>(0);
-            let feature = row.get::<usize, String>(1);
+        for condruf in condrufs.inner() {
+            let cond = condruf.cond;
+            let feature = condruf.feature;
 
             // Check the conditions and add the feature if enabled.
             if let Some(cond) = cond {
@@ -591,8 +596,19 @@ impl DepOps for DepOpsVirt {
             return Ok(FxHashMap::default());
         }
 
-        self.get_cads_with_crate_name(name)
-            .map_err(|e| AuditError::InnerError(e))
+        if let Some(cads) = self.cads_cache.borrow().get(name) {
+            return Ok(cads.clone());
+        }
+
+        let cads = self
+            .get_cads_with_crate_name(name)
+            .map_err(|e| AuditError::InnerError(e))?;
+
+        self.cads_cache
+            .borrow_mut()
+            .insert(name.to_string(), cads.clone());
+
+        Ok(cads)
     }
 
     fn get_pkg_versionreq(
@@ -605,12 +621,22 @@ impl DepOps for DepOpsVirt {
             return Ok(localreq.clone());
         }
 
+        let name_ver = format!("{}@{}", name, ver);
+        if let Some(reqs) = self.reqs_cache.borrow().get(&name_ver) {
+            return Ok(reqs.clone());
+        }
+
         let version_id = self
             .get_version_id_with_name_ver(name, ver)
             .map_err(|e| AuditError::InnerError(e))?;
 
-        self.get_reqs_with_version_id(version_id)
-            .map_err(|e| AuditError::InnerError(e))
+        let reqs = self
+            .get_reqs_with_version_id(version_id)
+            .map_err(|e| AuditError::InnerError(e))?;
+
+        self.reqs_cache.borrow_mut().insert(name_ver, reqs.clone());
+
+        Ok(reqs)
     }
 
     fn extract_rufs(

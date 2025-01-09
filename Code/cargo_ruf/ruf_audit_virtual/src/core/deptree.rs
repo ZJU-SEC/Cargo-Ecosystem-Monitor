@@ -6,7 +6,7 @@ use cargo_lock::dependency::{
     Tree,
 };
 use fxhash::{FxHashMap, FxHashSet};
-use petgraph::visit::{self, EdgeRef};
+use petgraph::{algo::toposort, visit::EdgeRef};
 use semver::{Version, VersionReq};
 
 use crate::{
@@ -36,7 +36,6 @@ pub struct DepTreeManager<D: DepOps> {
         FxHashMap<
             String,
             (
-                bool, // Info usable
                 bool, // Candidates removable
                 FxHashMap<Version, (CondRufs, FxHashMap<String, VersionReq>)>,
             ),
@@ -100,11 +99,27 @@ impl<D: DepOps> DepTreeManager<D> {
         self.depops.get_resolve_lockfile(&self.depresolve.0)
     }
 
+    pub fn set_fix_limit(&self, fixes: &Vec<(String, Version, Version)>) {
+        // Updates limits on fix, this will also accelerate the step fixing.
+        let mut limited_fix_mut = self.limited_fix.borrow_mut();
+        for (name, _, fix_ver) in fixes {
+            let req = VersionReq::parse(&format!("<={fix_ver}")).unwrap();
+            limited_fix_mut.insert(name.clone(), req);
+        }
+        drop(limited_fix_mut);
+    }
+
+    pub fn clear_fix_limit(&self) {
+        self.limited_fix.borrow_mut().clear();
+    }
+
     /// Update rust version configs.
     pub fn switch_rustv(&mut self, rustv: u32) {
         self.rustv = rustv;
         // Restore the max tree and fix limitations.
         self.depresolve = self.maxresolve.clone();
+
+        self.limited_candidates.borrow_mut().clear();
         self.limited_fix.borrow_mut().clear();
     }
 
@@ -115,26 +130,22 @@ impl<D: DepOps> DepTreeManager<D> {
         fixes: Vec<(String, Version, Version)>,
         debugger: &mut impl Write,
     ) -> Result<(), AuditError> {
-        // Updates limits on fix, this will also accelerate the step fixing.
         let max_step = fixes.len();
-        let mut limited_fix_mut = self.limited_fix.borrow_mut();
-        for (name, _, fix_ver) in fixes {
-            let req = VersionReq::parse(&format!("<={fix_ver}")).unwrap();
-            limited_fix_mut.insert(name.clone(), req);
-        }
+        let mut cur_step = 0;
+        let issue_pkg = self.get_graph()[issue_nx].clone();
+
         writeln!(
             debugger,
-            "[Deptree Debug] issue_dofix: updates limited_fix {:?}",
-            limited_fix_mut
+            "[Deptree Debug] issue_dofix: start fixing {}@{} with limits: {:?}",
+            issue_pkg.name,
+            issue_pkg.version,
+            self.limited_fix
+                .borrow()
                 .iter()
-                .map(|(k, req)| format!("{}: {}", k, req))
+                .map(|(k, v)| format!("{}: {}", k, v))
                 .collect::<Vec<_>>()
         )
         .unwrap();
-        drop(limited_fix_mut);
-
-        let mut cur_step = 0;
-        let issue_pkg = self.get_graph()[issue_nx].clone();
 
         loop {
             assert!(cur_step <= max_step, "Fatal, step fixing exceeds max step");
@@ -196,9 +207,8 @@ impl<D: DepOps> DepTreeManager<D> {
         issue_nx: NodeIndex,
         debugger: &mut impl Write,
     ) -> Result<Vec<(NodeIndex, Version)>, AuditError> {
-        let graph = self.get_graph();
-        let dep = &graph[issue_nx];
-
+        // let graph = self.get_graph();
+        // let dep = &graph[issue_nx];
         // writeln!(
         //     debugger,
         //     "[Deptree Debug] issue_fixable: check {}@{} fixibility",
@@ -215,7 +225,9 @@ impl<D: DepOps> DepTreeManager<D> {
         }
 
         // Prepare candidates.
-        self.prepare_limited_candidates(issue_nx, None, debugger)?;
+        self.limited_candidates.borrow_mut().clear();
+
+        self.prepare_limited_candidates(issue_nx, debugger)?;
         self.get_step_fix(issue_nx, debugger)
     }
 
@@ -225,21 +237,28 @@ impl<D: DepOps> DepTreeManager<D> {
         issue_nx: NodeIndex,
         debugger: &mut impl Write,
     ) -> Result<Vec<(NodeIndex, Version)>, AuditError> {
+        // let start = Instant::now();
         let mut fixes = self.get_step_fix_inner(issue_nx, debugger)?;
-        let mut topdown_fix = Vec::new();
-        // Topdown the fix.
-        let graph = self.get_graph();
-        let root = self.get_root();
+        let mut topo_fix = Vec::new();
 
-        let mut bfs = visit::Bfs::new(&graph, root);
-        while let Some(nx) = bfs.next(&graph) {
-            if let Some(fix) = fixes.remove(&nx) {
-                topdown_fix.push((nx, fix));
+        // Do topo sort here.
+        let graph = self.get_graph();
+        let sorted = toposort(graph, None).expect("Fatal, topo fail with cycles");
+        for node in sorted {
+            if let Some(fix) = fixes.remove(&node) {
+                topo_fix.push((node, fix));
             }
         }
 
+        // writeln!(
+        //     debugger,
+        //     "[Deptree Time] get_step_fix: {:?}",
+        //     start.elapsed()
+        // )
+        // .unwrap();
+
         assert!(fixes.is_empty(), "Fatal, fixes mismatch with deptree.");
-        Ok(topdown_fix)
+        Ok(topo_fix)
     }
 
     /// Get the fixing steps.
@@ -257,8 +276,7 @@ impl<D: DepOps> DepTreeManager<D> {
         let limited_candidates_borrow = self.limited_candidates.borrow();
 
         // 1. Check direct fixable first.
-        let (usable, _removable, candidates) = &limited_candidates_borrow.get(&dep_name).unwrap();
-        assert!(*usable, "Fatal, access not usable limited_candidates");
+        let (_removable, candidates) = &limited_candidates_borrow.get(&dep_name).unwrap();
 
         let limits_on_candidates = self.limited_fix.borrow().get(&dep_name).cloned();
         let candidates = candidates
@@ -322,6 +340,7 @@ impl<D: DepOps> DepTreeManager<D> {
 
             let mut incompatible_update = false;
             for (p, ver) in chain {
+                assert!(graph[p].version != ver, "Fatal, try update the same node");
                 if let Some(old_ver) = fix.get(&p) {
                     if check_compatible(old_ver, &ver)? {
                         if old_ver < &ver {
@@ -397,34 +416,31 @@ impl<D: DepOps> DepTreeManager<D> {
     ) -> Result<Vec<&'ctx Version>, AuditError> {
         let graph = self.get_graph();
         let pkg_name = graph[pkg_nx].name.as_str();
-        let parents = self.get_parents(pkg_nx);
         let limited_candidates_borrow = self.limited_candidates.borrow();
 
         // Collect parents' version req on current package.
         let mut version_reqs = Vec::new();
+        let parents = self.get_parents_sorted(pkg_nx);
         for p in parents {
             let p_pkg = &graph[p];
 
-            let req = limited_candidates_borrow
+            let req = match limited_candidates_borrow
                 .get(p_pkg.name.as_str())
-                .and_then(|(usable, _removable, candidates)| {
-                    assert!(*usable, "Fatal, access not usable limited_candidates");
-                    candidates.get(&p_pkg.version)
-                })
+                .and_then(|(_removable, candidates)| candidates.get(&p_pkg.version))
                 .map(|(_, meta_reqs)| {
                     meta_reqs
                         .get(pkg_name)
                         .expect("Fatal, cannot find dependency in parent package")
                         .clone()
-                })
-                .unwrap_or_else(|| {
-                    self.depops
-                        .get_pkg_versionreq(p_pkg.name.as_str(), &p_pkg.version.to_string())
-                        .expect("Fatal, cannot cannot find dependency in parent package")
-                        .get(pkg_name)
-                        .expect("Fatal, cannot find dependency in parent package")
-                        .clone()
-                });
+                }) {
+                Some(req) => req,
+                None => self
+                    .depops
+                    .get_pkg_versionreq(p_pkg.name.as_str(), &p_pkg.version.to_string())?
+                    .get(pkg_name)
+                    .expect("Fatal, cannot find dependency in parent package")
+                    .clone(),
+            };
 
             version_reqs.push((p, req));
         }
@@ -445,13 +461,40 @@ impl<D: DepOps> DepTreeManager<D> {
         child: Option<&Version>,
         debugger: &mut impl Write,
     ) -> Result<Vec<(NodeIndex, Version)>, AuditError> {
-        let parents = self.get_parents(child_nx);
+        let parents = self.get_parents_sorted(child_nx);
         let graph = self.get_graph();
         let mut fixes = Vec::new();
 
         let limited_candidates_borrow = self.limited_candidates.borrow();
 
         for p in parents {
+            if let Some(child) = child {
+                let p_pkg = &graph[p];
+                let child_pkg = &graph[child_nx];
+
+                let req = limited_candidates_borrow
+                    .get(p_pkg.name.as_str())
+                    .and_then(|(_removable, candidates)| candidates.get(&p_pkg.version))
+                    .map(|(_, meta_reqs)| {
+                        meta_reqs
+                            .get(child_pkg.name.as_str())
+                            .expect("Fatal, cannot find dependency in parent package")
+                            .clone()
+                    })
+                    .unwrap_or_else(|| {
+                        self.depops
+                            .get_pkg_versionreq(p_pkg.name.as_str(), &p_pkg.version.to_string())
+                            .unwrap()
+                            .get(child_pkg.name.as_str())
+                            .expect("Fatal, cannot find dependency in parent package")
+                            .clone()
+                    });
+                if req.matches(child) {
+                    // Ok this is not the limit parents.
+                    continue;
+                }
+            }
+
             // writeln!(
             //     debugger,
             //     "[Deptree Debug] get_req_ok_parents: check parent {}@{} - child {}@{}",
@@ -471,7 +514,7 @@ impl<D: DepOps> DepTreeManager<D> {
                 let (_, meta_reqs) = limited_candidates_borrow
                     .get(graph[p].name.as_str())
                     .unwrap()
-                    .2
+                    .1
                     .get(&graph[p].version)
                     .unwrap();
 
@@ -498,6 +541,14 @@ impl<D: DepOps> DepTreeManager<D> {
             // .unwrap();
             if !usables.is_empty() {
                 // Ok we find needed parents.
+                // writeln!(
+                //     debugger,
+                //     "[Deptree Debug] get_req_ok_parents: found usable parent for {}@{}: {:?}",
+                //     graph[child_nx].name,
+                //     child.map(|v| v.to_string()).unwrap_or("None".to_string()),
+                //     usables[0].to_string(),
+                // )
+                // .unwrap();
                 fixes.push((p, usables[0].clone()));
             } else {
                 // Or we still need to go up, try from latest req_ok_parents.
@@ -518,6 +569,9 @@ impl<D: DepOps> DepTreeManager<D> {
                             }
                         }
                     };
+                    if let Some(ok_ver) = req_ok_p {
+                        chain.push((p, ok_ver.clone()));
+                    }
                     // writeln!(
                     //     debugger,
                     //     "[Deptree Debug] get_req_ok_parents: found usable chain for {}@{}: {:?}",
@@ -529,9 +583,6 @@ impl<D: DepOps> DepTreeManager<D> {
                     //         .collect::<Vec<_>>()
                     // )
                     // .unwrap();
-                    if let Some(ok_ver) = req_ok_p {
-                        chain.push((p, ok_ver.clone()));
-                    }
                     break;
                 }
                 if chain.is_empty() {
@@ -562,9 +613,18 @@ impl<D: DepOps> DepTreeManager<D> {
 
         let limited_candidates_borrow = self.limited_candidates.borrow();
 
-        let (usable, _removable, parent_candidates) =
-            &limited_candidates_borrow.get(parent_name).unwrap();
-        assert!(*usable, "Fatal, access not usable limited_candidates");
+        // println!(
+        //     "[DEBUG] parent_name: {parent_name}, limited_candidates_borrow: {:?}",
+        //     limited_candidates_borrow
+        //         .iter()
+        //         .map(|(name, (_, vers))| format!(
+        //             "{} - {:?}\n",
+        //             name,
+        //             vers.iter().map(|(v, _)| v.to_string()).collect::<Vec<String>>()
+        //         ))
+        //         .collect::<Vec<String>>()
+        // );
+        let (_removable, parent_candidates) = &limited_candidates_borrow.get(parent_name).unwrap();
 
         let limits_on_candidates = self.limited_fix.borrow().get(parent_name).cloned();
         let parent_candidates_iter = parent_candidates
@@ -597,148 +657,98 @@ impl<D: DepOps> DepTreeManager<D> {
         Ok(usable)
     }
 
-    /// Get parents and sorted by depth.
-    fn get_parents(&self, depnx: NodeIndex) -> Vec<NodeIndex> {
-        let graph = self.depresolve.1.graph();
-
-        let parents: Vec<NodeIndex> = graph
+    /// Get direct parents, not sorted.
+    fn get_direct_parents(&self, depnx: NodeIndex) -> Vec<NodeIndex> {
+        self.get_graph()
             .edges_directed(depnx, EdgeDirection::Incoming)
             .map(|edge| edge.source())
-            .collect();
-
-        let mut parents_with_depth: Vec<(NodeIndex, usize)> = parents
-            .iter()
-            .map(|&parent| {
-                let mut depth = 0;
-                let mut current = parent;
-                let mut visited = FxHashSet::default();
-                visited.insert(current);
-
-                loop {
-                    let incoming_edges = graph.edges_directed(current, EdgeDirection::Incoming);
-                    let mut has_parent = false;
-                    for edge in incoming_edges {
-                        let next_parent = edge.source();
-                        if !visited.contains(&next_parent) {
-                            depth += 1;
-                            current = next_parent;
-                            visited.insert(current);
-                            has_parent = true;
-                            break;
-                        }
-                    }
-                    if !has_parent {
-                        break;
-                    }
-                }
-                (parent, depth)
-            })
-            .collect();
-
-        parents_with_depth.sort_by(|a, b| b.1.cmp(&a.1));
-
-        parents_with_depth
-            .into_iter()
-            .map(|(node, _)| node)
             .collect()
+    }
+
+    /// Get all parents (up to root), not sorted.
+    fn get_all_parents(&self, depnx: NodeIndex) -> FxHashSet<NodeIndex> {
+        let graph = self.get_graph();
+        let root = self.get_root();
+
+        let mut ancestors = FxHashSet::default();
+        let mut stack = vec![depnx];
+        while let Some(node) = stack.pop() {
+            if ancestors.insert(node) {
+                for edge in graph.edges_directed(node, EdgeDirection::Incoming) {
+                    stack.push(edge.source());
+                }
+            }
+        }
+        assert!(ancestors.contains(&root), "Fatal, root not in ancestors");
+        // FIXME: We remove the virt node, shall only used in virt fix.
+        ancestors.remove(&root);
+
+        ancestors
+    }
+
+    fn get_topo_sort(&self, nodes: FxHashSet<NodeIndex>) -> Vec<NodeIndex> {
+        let graph = self.get_graph();
+        let sorted = toposort(graph, None).expect("Fatal, topo fail with cycles");
+
+        sorted.into_iter().filter(|n| nodes.contains(n)).collect()
+    }
+
+    /// Get parents and sorted by depth.
+    fn get_parents_sorted(&self, depnx: NodeIndex) -> Vec<NodeIndex> {
+        let parents = self.get_direct_parents(depnx).into_iter().collect();
+        self.get_topo_sort(parents)
     }
 
     /// Focus on possible candiates, not all candidates.
     fn prepare_limited_candidates(
         &self,
         pkg_nx: NodeIndex,
-        need_req_on: Option<NodeIndex>,
         debugger: &mut impl Write,
-    ) -> Result<Option<Vec<DepVersionReq>>, AuditError> {
-        let graph = self.get_graph();
-        let pkg = &graph[pkg_nx];
-        let pkg_name = pkg.name.to_string();
+    ) -> Result<(), AuditError> {
+        // let start = Instant::now();
+        let all_parents = self.get_all_parents(pkg_nx);
+        let topos = self.get_topo_sort(all_parents);
 
-        writeln!(
-            debugger,
-            "[Deptree Debug] prepare_limited_candidates: prepare candidates {} with needed req on {}.",
-            pkg_name, need_req_on.map(|nx| graph[nx].name.to_string()).unwrap_or("None".to_string())
-        )
-        .unwrap();
-
-        if let Some((usable, removable, datas)) = self.limited_candidates.borrow().get(&pkg_name)
-            && *usable
-        {
-            // Already prepared.
-            // writeln!(
-            //     debugger,
-            //     "[Deptree Debug] prepare_limited_candidates: {} already prepared.",
-            //     pkg_name,
-            // )
-            // .unwrap();
-
-            if let Some(child) = need_req_on {
-                let mut all_reqs = Vec::new();
-                let child_pkg = &graph[child];
-
-                for (_, (_, meta_reqs)) in datas.iter() {
-                    if let Some(req) = meta_reqs.get(child_pkg.name.as_str()) {
-                        all_reqs.push(DepVersionReq::from(req));
-                    } else {
-                        all_reqs.push(DepVersionReq::Remove);
-                    }
-                }
-
-                if *removable {
-                    all_reqs.push(DepVersionReq::Remove);
-                }
-
-                return Ok(Some(all_reqs));
-            } else {
-                return Ok(None);
-            }
+        // let graph = self.get_graph();
+        for nx in topos {
+            // if self
+            //     .limited_candidates
+            //     .borrow()
+            //     .get(graph[nx].name.as_str())
+            //     .is_some()
+            //     && self.check_node_unique(nx, debugger)
+            // {
+            //     continue;
+            // }
+            self.prepare_limited_candidates_inner(nx, debugger)?;
         }
 
-        // Or we got to prepare it.
-        let reqs = self.prepare_limited_candidates_inner(pkg_nx, need_req_on, debugger)?;
+        // writeln!(
+        //     debugger,
+        //     "[Deptree Time] prepare_limited_candidates: {:?}",
+        //     start.elapsed()
+        // )
+        // .unwrap();
 
-        // Since one pkg might be used by many parents with differnt versions, we prepare them all.
-        for (_, nx) in self
-            .depresolve
-            .1
-            .nodes()
-            .iter()
-            .filter(|(_, &nx)| graph[nx].name == pkg.name && nx != pkg_nx)
-        {
-            self.prepare_limited_candidates_inner(*nx, None, debugger)?;
-        }
-
-        // Inform usable.
-        self.limited_candidates
-            .borrow_mut()
-            .get_mut(pkg.name.as_str())
-            .unwrap()
-            .0 = true;
-
-        if need_req_on.is_some() {
-            return Ok(Some(reqs.unwrap()));
-        } else {
-            return Ok(None);
-        }
+        Ok(())
     }
 
     fn prepare_limited_candidates_inner(
         &self,
         pkg_nx: NodeIndex,
-        need_req_on: Option<NodeIndex>,
         debugger: &mut impl Write,
-    ) -> Result<Option<Vec<DepVersionReq>>, AuditError> {
+    ) -> Result<(), AuditError> {
         let graph = self.get_graph();
         let pkg = &graph[pkg_nx];
         let pkg_name = pkg.name.to_string();
         let pkg_ver = pkg.version.to_string();
 
-        writeln!(
-            debugger,
-            "[Deptree Debug] prepare_limited_candidates_inner: prepare candidates {}@{} with needed req on {}.",
-            pkg_name, pkg_ver, need_req_on.map(|nx| graph[nx].name.to_string()).unwrap_or("None".to_string())
-        )
-        .unwrap();
+        // writeln!(
+        //     debugger,
+        //     "[Deptree Debug] prepare_limited_candidates_inner: prepare candidates {}@{}.",
+        //     pkg_name, pkg_ver
+        // )
+        // .unwrap();
 
         // Is it local?
         if self.is_local(&pkg_nx) {
@@ -747,66 +757,56 @@ impl<D: DepOps> DepTreeManager<D> {
 
             datas.insert(pkg.version.clone(), (CondRufs::empty(), meta_reqs));
 
-            writeln!(
-                debugger,
-                "[Deptree Debug] prepare_limited_candidates_inner: it's local parent {}@{}.",
-                pkg_name, pkg_ver
-            )
-            .unwrap();
+            // writeln!(
+            //     debugger,
+            //     "[Deptree Debug] prepare_limited_candidates_inner: it's local parent {}@{}.",
+            //     pkg_name, pkg_ver
+            // )
+            // .unwrap();
 
-            if let Some(child) = need_req_on {
-                let mut all_reqs = Vec::new();
-                let child_pkg = &graph[child];
+            self.limited_candidates
+                .borrow_mut()
+                .insert(pkg_name.clone(), (false, datas));
 
+            return Ok(());
+        }
+
+        // Prepare it, along with all its parents.
+        let mut possible_candidates = self.depops.get_all_candidates(&pkg_name)?;
+        let parents = self.get_direct_parents(pkg_nx);
+        let mut removable = Vec::new();
+        for p in parents {
+            let p_pkg = &graph[p];
+
+            let limited_candidates_borrow = self.limited_candidates.borrow();
+            let (p_removable, datas) = limited_candidates_borrow.get(p_pkg.name.as_str()).unwrap();
+
+            if *p_removable {
+                // We donot need to filter it.
+                removable.push(true);
+            } else {
+                let mut all_reqs = FxHashSet::default();
                 for (_, (_, meta_reqs)) in datas.iter() {
-                    if let Some(req) = meta_reqs.get(child_pkg.name.as_str()) {
-                        all_reqs.push(DepVersionReq::from(req));
+                    if let Some(req) = meta_reqs.get(&pkg_name) {
+                        all_reqs.insert(DepVersionReq::from(req));
                     } else {
-                        all_reqs.push(DepVersionReq::Remove);
+                        all_reqs.insert(DepVersionReq::Remove);
+                        // Early stop.
+                        break;
                     }
                 }
 
-                self.limited_candidates
-                    .borrow_mut()
-                    .insert(pkg_name.clone(), (true, false, datas));
-
-                return Ok(Some(all_reqs));
-            } else {
-                self.limited_candidates
-                    .borrow_mut()
-                    .insert(pkg_name.clone(), (true, false, datas));
-
-                return Ok(None);
+                if all_reqs.contains(&DepVersionReq::Remove) {
+                    // We also donot need to filter.
+                    removable.push(true);
+                } else {
+                    removable.push(false);
+                    possible_candidates = possible_candidates
+                        .into_iter()
+                        .filter(|(k, _)| all_reqs.iter().any(|req| req.matches(k)))
+                        .collect();
+                }
             }
-        }
-
-        // Prepare it, along with all its parents, up to the locals.
-        let mut possible_candidates = self.depops.get_all_candidates(&pkg_name)?;
-        let parents = self.get_parents(pkg_nx);
-        let mut removable = Vec::new();
-        for p in parents {
-            let reqs = self
-                .prepare_limited_candidates(p, Some(pkg_nx), debugger)?
-                .unwrap()
-                .into_iter()
-                .collect::<FxHashSet<DepVersionReq>>();
-
-            possible_candidates = possible_candidates
-                .into_iter()
-                .filter(|(k, _)| reqs.iter().any(|req| req.matches(k)))
-                .collect();
-
-            removable.push(reqs.contains(&DepVersionReq::Remove));
-
-            // writeln!(
-            //     debugger,
-            //     "[Deptree Debug] prepare_limited_candidates_inner: parent {} reqs {:?}.\n {} after filter: {:?}",
-            //     graph[p].name,
-            //     reqs.iter().map(|req| req.to_string()).collect::<Vec<_>>(),
-            //     pkg_name,
-            //     possible_candidates.iter().map(|(v, _)| v.to_string()).collect::<Vec<_>>(),
-            // )
-            // .unwrap();
         }
 
         if possible_candidates.get(&pkg.version).is_none() {
@@ -843,7 +843,7 @@ impl<D: DepOps> DepTreeManager<D> {
                 .get_pkg_versionreq(&pkg_name, &candidate.to_string())
             {
                 Ok(reqs) => reqs,
-                Err(e) => {
+                Err(_e) => {
                     // writeln!(
                     //     debugger,
                     //     "[Deptree Debug] prepare_limited_candidates_inner: {}@{} get reqs failed with error {:?}.",
@@ -857,8 +857,6 @@ impl<D: DepOps> DepTreeManager<D> {
             datas.insert(candidate, (condrufs, meta_reqs));
         }
 
-        let removable = removable.into_iter().all(|r| r);
-
         // writeln!(
         //     debugger,
         //     "[Deptree Debug] prepare_limited_candidates_inner: possible candidates (X {}) for {pkg_name} {:?}",
@@ -867,42 +865,17 @@ impl<D: DepOps> DepTreeManager<D> {
         // )
         // .unwrap();
 
-        if let Some(child) = need_req_on {
-            let mut all_reqs = Vec::new();
-            let child_pkg = &graph[child];
+        let removable = removable.into_iter().all(|r| r);
+        let mut limited_candidates_borrow_mut = self.limited_candidates.borrow_mut();
+        let entry = limited_candidates_borrow_mut
+            .entry(pkg_name)
+            .or_insert((false, datas));
 
-            for (_, (_, meta_reqs)) in datas.iter() {
-                if let Some(req) = meta_reqs.get(child_pkg.name.as_str()) {
-                    all_reqs.push(DepVersionReq::from(req));
-                } else {
-                    all_reqs.push(DepVersionReq::Remove);
-                }
-            }
-
-            if removable {
-                all_reqs.push(DepVersionReq::Remove);
-            }
-
-            let mut limited_candidates_borrow_mut = self.limited_candidates.borrow_mut();
-            let entry = limited_candidates_borrow_mut
-                .entry(pkg_name)
-                .or_insert((false, false, datas));
-            if removable {
-                entry.1 = true;
-            }
-
-            return Ok(Some(all_reqs));
-        } else {
-            let mut limited_candidates_borrow_mut = self.limited_candidates.borrow_mut();
-            let entry = limited_candidates_borrow_mut
-                .entry(pkg_name)
-                .or_insert((false, false, datas));
-            if removable {
-                entry.1 = true;
-            }
-
-            return Ok(None);
+        if removable {
+            entry.0 = true;
         }
+
+        return Ok(());
     }
 
     fn limited_fix_filter(v: &Version, limit: &Option<VersionReq>) -> bool {

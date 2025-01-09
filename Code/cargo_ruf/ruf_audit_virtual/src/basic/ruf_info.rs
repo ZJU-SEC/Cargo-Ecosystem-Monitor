@@ -1,13 +1,13 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CondRuf {
     pub cond: Option<String>,
     pub feature: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CondRufs(Vec<CondRuf>);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RufStatus {
     Unknown,
     Active,
@@ -35,6 +35,10 @@ impl CondRufs {
 
     pub fn borrow(&self) -> Vec<&CondRuf> {
         self.0.iter().collect()
+    }
+
+    pub fn inner(self) -> Vec<CondRuf> {
+        self.0.into_iter().collect()
     }
 }
 

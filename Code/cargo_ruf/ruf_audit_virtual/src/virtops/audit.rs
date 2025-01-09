@@ -26,7 +26,6 @@ pub fn audit(
         .unwrap();
     deptree.set_local(&logical_root);
 
-    // Check issues and fix them.
     check_fix(deptree, debugger)
 }
 
@@ -53,21 +52,11 @@ fn check_fix(
             return Ok(rustc);
         }
 
-        let first_issue = issue_deps.first().unwrap().to_owned();
         match check_fixable(&mut deptree, issue_deps, debugger) {
             Ok(fixes) => {
-                if let Err(e) = try_fix(
-                    &mut deptree,
-                    first_issue,
-                    fixes.into_iter().next().unwrap(),
-                    debugger,
-                ) {
-                    if !e.is_inner() {
-                        writeln!(debugger,
+                if let Err(e) = try_fix(&mut deptree, fixes.into_iter().next().unwrap(), debugger) {
+                    writeln!(debugger,
                     "[VirtAudit Debug] check_fix: fix failure for rustc version {} with issue: {:?}", rustc, e).unwrap();
-                    } else {
-                        return Err(e);
-                    }
                 } else {
                     writeln!(
                         debugger,
@@ -133,7 +122,7 @@ fn check_fixable(
     deptree: &mut DepTreeManager<DepOpsVirt>,
     issue_deps: Vec<NodeIndex>,
     debugger: &mut impl Write,
-) -> Result<Vec<Vec<(NodeIndex, Version)>>, AuditError> {
+) -> Result<Vec<Vec<(String, Version, Version)>>, AuditError> {
     let graph = deptree.get_graph();
     let mut fixes = Vec::new();
 
@@ -147,19 +136,31 @@ fn check_fixable(
         .unwrap();
         match deptree.issue_fixable(nx, debugger) {
             Ok(fix) => {
+                let fix = fix
+                    .into_iter()
+                    .map(|(nx, fix_ver)| {
+                        (
+                            graph[nx].name.to_string(),
+                            graph[nx].version.clone(),
+                            fix_ver,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
                 writeln!(
                     debugger,
-                    "[VirtAudit Debug] check_fixable: issue dep {}@{} is fixable with {:?}.",
+                    "[VirtAudit Debug] check_fixable: issue dep {}@{} is fixable with {:?}, adds to fix limits.",
                     graph[nx].name,
                     graph[nx].version,
                     fix.iter()
-                        .map(|(x, ver)| format!(
-                            "{}@{} -> {}",
-                            graph[*x].name, graph[*x].version, ver
-                        ))
+                        .map(|(name, ver, fix_ver)| format!("{}@{} -> {}", name, ver, fix_ver))
                         .collect::<Vec<_>>()
                 )
                 .unwrap();
+
+                // Add limits for the fix.
+                deptree.set_fix_limit(&fix);
+
                 fixes.push(fix);
             }
             Err(e) => {
@@ -174,51 +175,23 @@ fn check_fixable(
         }
     }
 
+    // Ok clear the limit.
+    deptree.clear_fix_limit();
+
     Ok(fixes)
 }
 
 fn try_fix(
     deptree: &mut DepTreeManager<DepOpsVirt>,
-    first_issue: NodeIndex,
-    first_fix: Vec<(NodeIndex, Version)>,
+    first_fix: Vec<(String, Version, Version)>,
     debugger: &mut impl Write,
 ) -> Result<(), AuditError> {
     // For loop detect.
     let mut already_fixed = FxHashSet::default();
+    // Set the limit first.
+    deptree.set_fix_limit(&first_fix);
 
-    {
-        let graph = deptree.get_graph();
-        let issue_name_ver = format!("{}@{}", graph[first_issue].name, graph[first_issue].version);
-
-        let first_fix = first_fix
-            .into_iter()
-            .map(|(nx, fix_ver)| {
-                (
-                    graph[nx].name.to_string(),
-                    graph[nx].version.clone(),
-                    fix_ver,
-                )
-            })
-            .collect::<Vec<_>>();
-
-        writeln!(
-            debugger,
-            "[VirtAudit Debug] try_fix: Try fix {} with {:?}",
-            graph[first_issue].name,
-            first_fix
-                .iter()
-                .map(|(name, ver, fix_ver)| format!("{}@{} -> {}", name, ver, fix_ver))
-                .collect::<Vec<_>>()
-        )
-        .unwrap();
-
-        // Do the first fix.
-        deptree.issue_dofix(first_issue, first_fix, debugger)?;
-
-        already_fixed.insert(issue_name_ver);
-    }
-
-    // The first fix modify the deptree, and thus the remaining issues and their fixability may changes.
+    // The fix modify the deptree, and thus the remaining issues and their fixability may changes.
     // So here we have to recheck the issues and fix them.
     loop {
         let graph = deptree.get_graph();
@@ -251,8 +224,12 @@ fn try_fix(
             graph[issue_nx].name,
             fix.iter()
                 .map(|(name, ver, fix_ver)| format!("{}@{} -> {}", name, ver, fix_ver))
+                .collect::<Vec<_>>()
         )
         .unwrap();
+
+        // Set the limit first.
+        deptree.set_fix_limit(&fix);
 
         deptree.issue_dofix(issue_nx, fix, debugger)?;
 
@@ -294,7 +271,7 @@ fn test_audit() {
     // let res = audit("bouncer", "1.0.0", WORKSPACE_PATH, &mut *buffer);
     // let res = audit("tari_comms_dht", "0.8.1", WORKSPACE_PATH, &mut *buffer);
 
-    let res = audit("simple_gaussian", "0.2.5", WORKSPACE_PATH, &mut *buffer);
+    let res = audit("spectra", "0.7.1", WORKSPACE_PATH, &mut *buffer);
 
     println!("RESULTS: {:?}", res);
 }
