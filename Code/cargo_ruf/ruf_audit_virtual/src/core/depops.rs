@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use cargo::core::Resolve;
 use cargo_lock::{dependency::Tree, Version};
 use fxhash::FxHashMap;
@@ -36,8 +38,44 @@ pub trait DepOps {
     fn update_resolve(
         &self,
         prev_resolve: &Resolve,
-        updates: Vec<(String, String, String)>,
+        update: (String, Version, Version),
     ) -> Result<(Resolve, Tree), AuditError>;
     /// Get lockfile from the resolve
     fn get_resolve_lockfile(&self, resolve: &Resolve) -> Result<String, AuditError>;
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub enum DepVersionReq {
+    Depend(VersionReq),
+    Remove,
+}
+
+impl From<VersionReq> for DepVersionReq {
+    fn from(value: VersionReq) -> Self {
+        Self::Depend(value)
+    }
+}
+
+impl From<&VersionReq> for DepVersionReq {
+    fn from(value: &VersionReq) -> Self {
+        Self::Depend(value.clone())
+    }
+}
+
+impl Display for DepVersionReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DepVersionReq::Depend(req) => write!(f, "{}", req),
+            DepVersionReq::Remove => write!(f, "X"),
+        }
+    }
+}
+
+impl DepVersionReq {
+    pub fn matches(&self, v: &Version) -> bool {
+        match self {
+            DepVersionReq::Depend(req) => req.matches(v),
+            DepVersionReq::Remove => true,
+        }
+    }
 }

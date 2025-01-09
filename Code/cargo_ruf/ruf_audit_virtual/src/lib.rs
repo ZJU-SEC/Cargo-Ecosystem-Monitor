@@ -1,6 +1,8 @@
+#![feature(let_chains)]
+
 mod basic;
 mod core;
 mod virtops;
 
-pub use virtops::audit;
 pub use core::AuditError;
+pub use virtops::{audit, root_audit};

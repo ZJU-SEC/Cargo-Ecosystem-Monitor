@@ -23,6 +23,7 @@ pub fn get_ruf_status(ruf_name: &str, rustc_ver: u32) -> RufStatus {
     RufStatus::Unknown
 }
 
+#[allow(unused)]
 pub fn get_all_ruf_status(ruf_name: &str) -> [RufStatus; RUSTC_VER_NUM] {
     let mut ruf_status = Vec::new();
 

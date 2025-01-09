@@ -198,10 +198,14 @@ impl DepOpsVirt {
             let kind = row.get::<_, i32>(2);
 
             if kind != 2 {
-                // FIXME: Shall we ignore the optional, target, etc on the dependencies ?
-                let check_dup = dep_reqs.insert(name.clone(), req);
+                // NOTICE: Shall we ignore the optional, target, etc on the dependencies ?
+                let check_dup = dep_reqs.insert(name.clone(), req.clone());
                 if let Some(dup) = check_dup {
-                    return Err(format!("duplicated version reqs on {dup}"));
+                    if dup != req {
+                        return Err(format!(
+                            "conflict version reqs on {dup}, maybe differernt cfgs"
+                        ));
+                    }
                 }
             } // We DONOT care the dev dependencies.
         }
@@ -287,7 +291,113 @@ impl DepOpsVirt {
         Ok((resolve, tree))
     }
 
-    fn do_update_resolve(
+    /// Updates one pkg in a time.
+    fn do_update_resolve_once(
+        &self,
+        prev_resolve: &Resolve,
+        update: &(String, Version, Version),
+    ) -> Result<(Resolve, Tree), String> {
+        let config = GlobalContext::new(
+            Shell::new(),
+            self.workspace_path.clone(),
+            self.registry_path.clone(),
+        );
+        let ws = Workspace::new(&self.toml_path, &config).map_err(|e| e.to_string())?;
+
+        let _lock = ws
+            .gctx()
+            .acquire_package_cache_lock(CacheLockMode::DownloadExclusive)
+            .map_err(|e| e.to_string())?;
+
+        let mut registry = PackageRegistry::new(ws.gctx()).map_err(|e| e.to_string())?;
+        let mut to_avoid = HashSet::new();
+
+        let mut sources = Vec::new();
+        let (name, prev_ver, new_ver) = update;
+        {
+            let name_ver = format!("{}@{}", name, prev_ver);
+            let pkg_id = prev_resolve.query(&name_ver).unwrap();
+
+            to_avoid.insert(pkg_id);
+            sources.push({
+                assert!(pkg_id.source_id().is_registry());
+                pkg_id
+                    .source_id()
+                    .with_precise_registry_version(
+                        pkg_id.name(),
+                        pkg_id.version().clone(),
+                        &new_ver.to_string(),
+                    )
+                    .map_err(|e| e.to_string())?
+            });
+
+            if let Ok(unused_id) =
+                PackageIdSpec::query_str(&name_ver, prev_resolve.unused_patches().iter().cloned())
+            {
+                to_avoid.insert(unused_id);
+            }
+        }
+
+        // Mirror `--workspace` and never avoid workspace members.
+        // Filtering them out here so the above processes them normally
+        // so their dependencies can be updated as requested
+        to_avoid = to_avoid
+            .into_iter()
+            .filter(|id| {
+                for package in ws.members() {
+                    let member_id = package.package_id();
+                    // Skip checking the `version` because `previous_resolve` might have a stale
+                    // value.
+                    // When dealing with workspace members, the other fields should be a
+                    // sufficiently unique match.
+                    if id.name() == member_id.name() && id.source_id() == member_id.source_id() {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+
+        registry.add_sources(sources).map_err(|e| e.to_string())?;
+
+        // Here we place an artificial limitation that all non-registry sources
+        // cannot be locked at more than one revision. This means that if a Git
+        // repository provides more than one package, they must all be updated in
+        // step when any of them are updated.
+        //
+        // OFFICAL TODO: this seems like a hokey reason to single out the registry as being
+        // different.
+        let to_avoid_sources: HashSet<_> = to_avoid
+            .iter()
+            .map(|p| p.source_id())
+            .filter(|s| !s.is_registry())
+            .collect();
+
+        let keep =
+            |p: &PackageId| !to_avoid_sources.contains(&p.source_id()) && !to_avoid.contains(p);
+
+        let mut resolve = ops::resolve_with_previous(
+            &mut registry,
+            &ws,
+            &CliFeatures::new_all(true),
+            HasDevUnits::No,
+            Some(&prev_resolve),
+            Some(&keep),
+            &[],
+            true,
+        )
+        .map_err(|e| e.to_string())?;
+
+        let lockfile = ops::resolve_to_string(&ws, &mut resolve).map_err(|e| e.to_string())?;
+        let lockfile = Lockfile::from_str(&lockfile).map_err(|e| e.to_string())?;
+        let tree = lockfile.dependency_tree().map_err(|e| e.to_string())?;
+
+        Ok((resolve, tree))
+    }
+
+    #[allow(unused)]
+    /// It seems not to work when the updates become complex.
+    fn do_update_resolve_multi_in_one_time(
         &self,
         prev_resolve: &Resolve,
         updates: Vec<(String, String, String)>,
@@ -557,10 +667,10 @@ impl DepOps for DepOpsVirt {
     fn update_resolve(
         &self,
         prev_resolve: &Resolve,
-        updates: Vec<(String, String, String)>,
+        update: (String, Version, Version),
     ) -> Result<(Resolve, Tree), AuditError> {
-        self.do_update_resolve(prev_resolve, updates)
-            .map_err(|e| AuditError::InnerError(e))
+        self.do_update_resolve_once(prev_resolve, &update)
+            .map_err(|e| AuditError::InnerError(e.to_string()))
     }
 
     fn get_resolve_lockfile(&self, resolve: &Resolve) -> Result<String, AuditError> {
@@ -576,44 +686,4 @@ impl DepOps for DepOpsVirt {
 
         Ok(lockfile)
     }
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn test_DepOpsVirt() {
-    const _WORKSPACE_PATH: &str = "/home/ubuntu/Workspaces/Cargo-Ecosystem-Monitor/Code/cargo_ruf/ruf_audit_virtual/virt_work";
-    /*
-        TO TEST: get_cads_with_crate_name, get_reqs_with_version_id, first_resolve, update_resolve, extract_rufs_from_current_resolve
-    */
-    // let depops = DepOpsVirt::new("taxonomy", "0.3.1", WORKSPACE_PATH).unwrap();
-    // let depops = DepOpsVirt::new("sdl2-sys", "0.0.34", WORKSPACE_PATH).unwrap();
-    // let depops = DepOpsVirt::new("libc", "0.2.129", WORKSPACE_PATH).unwrap();
-    // let depops = DepOpsVirt::new("rich-sdl2-rust", "0.11.2", WORKSPACE_PATH).unwrap();
-
-    // let mut depops = DepOpsVirt::new("ahash", "0.7.0", WORKSPACE_PATH).unwrap();
-    // depops.update_resolve("getrandom", "0.2.7", "0.2.6").unwrap();
-    // depops.update_resolve("serde", "1.0.143", "1.0.140").unwrap();
-
-    // let resolve = depops.resolve.as_ref().unwrap();
-    // for pkg in resolve.iter() {
-    //     println!(
-    //         "{}-{}: {:?}",
-    //         pkg.name(),
-    //         pkg.version(),
-    //         resolve.features(pkg)
-    //     );
-
-    //     println!(
-    //         "{}-{}: {:?}",
-    //         pkg.name(),
-    //         pkg.version(),
-    //         resolve.summary(pkg).features().keys()
-    //     )
-    // }
-
-    // let res = depops.extract_rufs_from_current_resolve().unwrap();
-    // for (pkg, rufs) in res {
-    //     let usable = depops.check_rufs(63, &rufs);
-    //     println!("{} rufs: {:#?} [usable: {}]", pkg, rufs, usable);
-    // }
 }
