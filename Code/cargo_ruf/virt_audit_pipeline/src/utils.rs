@@ -31,7 +31,7 @@ use crossbeam::channel;
 use log::{error, info};
 use postgres::{Client, NoTls};
 
-use ruf_audit_virtual::{audit, AuditError};
+use ruf_audit_virtual::{treeonly_audit, AuditError, Summary};
 
 pub struct VersionInfo {
     pub version_id: i32,
@@ -97,7 +97,7 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                         workspace_str,
                         Arc::clone(&output),
                     )) {
-                        Ok(Ok(Ok(rustv))) => {
+                        Ok(Ok(Ok(summary))) => {
                             let duration = start_time.elapsed();
                             let output = String::from_utf8(output.lock().unwrap().to_vec())
                                 .expect("cannot convert output to string");
@@ -105,7 +105,8 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                 Arc::clone(&conn),
                                 version.version_id,
                                 "success",
-                                Some(rustv as i32),
+                                Some(summary.fix_rustv),
+                                Some(&format!("{:?}", summary)),
                                 None,
                                 Some(&output),
                                 duration,
@@ -129,6 +130,7 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                 version.version_id,
                                 status,
                                 None,
+                                None,
                                 Some(&error),
                                 Some(&output),
                                 duration,
@@ -148,6 +150,7 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                 version.version_id,
                                 "panic",
                                 None,
+                                None,
                                 Some(e),
                                 None,
                                 duration,
@@ -162,6 +165,7 @@ pub fn run_audit_virt(workers: usize, status: &str) {
                                 Arc::clone(&conn),
                                 version.version_id,
                                 "timeout",
+                                None,
                                 None,
                                 None,
                                 None,
@@ -233,8 +237,9 @@ fn prebuild(conn: Arc<Mutex<Client>>) {
                 r#"CREATE TABLE IF NOT EXISTS virt_audit_results(
                     version_id INT PRIMARY KEY,
                     result VARCHAR,
-                    rustv INT,
-                    error  VARCHAR,
+                    fix_rustv INT,
+                    summary TEXT,
+                    error  TEXT,
                     output TEXT,
                     time_duration BIGINT
                 )"#
@@ -256,7 +261,8 @@ fn store_audit_results(
     conn: Arc<Mutex<Client>>,
     version_id: i32,
     result: &str,
-    rustv: Option<i32>,
+    fix_rustv: Option<i32>,
+    summary: Option<&str>,
     error: Option<&str>,
     output: Option<&str>,
     time_duration: std::time::Duration,
@@ -265,9 +271,9 @@ fn store_audit_results(
     conn.lock()
     .unwrap()
     .query(
-        "INSERT INTO virt_audit_results(version_id, result, rustv, error, output, time_duration) VALUES($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (version_id) DO UPDATE SET result = EXCLUDED.result, rustv = EXCLUDED.rustv, error = EXCLUDED.error, output = EXCLUDED.output, time_duration = EXCLUDED.time_duration",
-        &[&version_id, &result, &rustv, &error, &output, &time_duration_secs],
+        "INSERT INTO virt_audit_results(version_id, result, fix_rustv, summary, error, output, time_duration) VALUES($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (version_id) DO UPDATE SET result = EXCLUDED.result, fix_rustv = EXCLUDED.fix_rustv, summary = EXCLUDED.summary, error = EXCLUDED.error, output = EXCLUDED.output, time_duration = EXCLUDED.time_duration",
+        &[&version_id, &result, &fix_rustv, &summary, &error, &output, &time_duration_secs],
     ).unwrap();
 }
 
@@ -286,9 +292,9 @@ async fn limited_audit(
     ver: &str,
     workspace: &str,
     output: Arc<Mutex<Vec<u8>>>,
-) -> Result<Result<Result<u32, AuditError>, Box<dyn Any + Send>>, ()> {
-    let result = timeout(Duration::from_secs(5 * 60), async {
-        panic::catch_unwind(|| audit(name, ver, workspace, &mut *output.lock().unwrap()))
+) -> Result<Result<Result<Summary, AuditError>, Box<dyn Any + Send>>, ()> {
+    let result = timeout(Duration::from_secs(10 * 60), async {
+        panic::catch_unwind(|| treeonly_audit(name, ver, workspace, &mut *output.lock().unwrap()))
     })
     .await;
 

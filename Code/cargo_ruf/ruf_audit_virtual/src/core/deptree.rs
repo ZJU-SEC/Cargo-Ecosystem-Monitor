@@ -129,11 +129,12 @@ impl<D: DepOps> DepTreeManager<D> {
         issue_nx: NodeIndex,
         fixes: Vec<(String, Version, Version)>,
         debugger: &mut impl Write,
-    ) -> Result<(), AuditError> {
+    ) -> Result<Vec<(String, Version, Version)>, AuditError> {
         let max_step = fixes.len();
         let mut cur_step = 0;
-        let issue_pkg = self.get_graph()[issue_nx].clone();
+        let mut do_fix = Vec::new();
 
+        let issue_pkg = self.get_graph()[issue_nx].clone();
         writeln!(
             debugger,
             "[Deptree Debug] issue_dofix: start fixing {}@{} with limits: {:?}",
@@ -147,23 +148,27 @@ impl<D: DepOps> DepTreeManager<D> {
         )
         .unwrap();
 
+        let mut first_fix = Some(fixes);
         loop {
             assert!(cur_step <= max_step, "Fatal, step fixing exceeds max step");
             let graph = self.get_graph();
             if let Some((_, issue_nx)) = self.depresolve.1.nodes().iter().find(|(_, nx)| {
                 graph[**nx].name == issue_pkg.name && graph[**nx].version == issue_pkg.version
             }) {
-                let mut step_fixes = self
-                    .get_step_fix(*issue_nx, debugger)?
-                    .into_iter()
-                    .map(|(nx, fix_ver)| {
-                        (
-                            graph[nx].name.to_string(),
-                            graph[nx].version.clone(),
-                            fix_ver,
-                        )
-                    })
-                    .collect::<Vec<_>>();
+                let mut step_fixes = if first_fix.is_some() {
+                    first_fix.take().unwrap()
+                } else {
+                    self.get_step_fix(*issue_nx, debugger)?
+                        .into_iter()
+                        .map(|(nx, fix_ver)| {
+                            (
+                                graph[nx].name.to_string(),
+                                graph[nx].version.clone(),
+                                fix_ver,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
 
                 writeln!(
                     debugger,
@@ -179,12 +184,12 @@ impl<D: DepOps> DepTreeManager<D> {
                 )
                 .unwrap();
 
-                let (resolve, tree) = self
-                    .depops
-                    .update_resolve(&self.depresolve.0, step_fixes.remove(0))?;
+                let fix = step_fixes.remove(0);
+                do_fix.push(fix.clone());
+
+                let (resolve, tree) = self.depops.update_resolve(&self.depresolve.0, fix)?;
                 let used_rufs = self.depops.extract_rufs(&resolve)?;
                 self.depresolve = Rc::new((resolve, tree, used_rufs));
-                // Shall we clear the candidates ? (This may improve minor fix rate, but cause great overheads).
 
                 cur_step += 1;
             } else {
@@ -198,7 +203,7 @@ impl<D: DepOps> DepTreeManager<D> {
             }
         }
 
-        Ok(())
+        Ok(do_fix)
     }
 
     /// This function will check whether the issue is fixable under current configs.

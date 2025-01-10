@@ -5,4 +5,4 @@ mod core;
 mod virtops;
 
 pub use core::AuditError;
-pub use virtops::{audit, root_audit};
+pub use virtops::{audit, root_audit, treeonly_audit, Summary};

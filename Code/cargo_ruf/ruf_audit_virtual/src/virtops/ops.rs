@@ -241,6 +241,8 @@ impl DepOpsVirt {
             self.workspace_path.clone(),
             self.registry_path.clone(),
         );
+        config.shell().set_verbosity(cargo::core::Verbosity::Quiet);
+
         let ws = Workspace::new(&self.toml_path, &config).map_err(|e| e.to_string())?;
         let mut registry = PackageRegistry::new(ws.gctx()).map_err(|e| e.to_string())?;
         let mut resolve = ops::resolve_with_previous(
@@ -275,6 +277,8 @@ impl DepOpsVirt {
                 self.workspace_path.clone(),
                 self.registry_path.clone(),
             );
+            config.shell().set_verbosity(cargo::core::Verbosity::Quiet);
+
             let ws = Workspace::new(&self.toml_path, &config).map_err(|e| e.to_string())?;
             let mut registry = PackageRegistry::new(ws.gctx()).map_err(|e| e.to_string())?;
 
@@ -310,6 +314,8 @@ impl DepOpsVirt {
             self.workspace_path.clone(),
             self.registry_path.clone(),
         );
+        config.shell().set_verbosity(cargo::core::Verbosity::Quiet);
+
         let ws = Workspace::new(&self.toml_path, &config).map_err(|e| e.to_string())?;
 
         let _lock = ws
