@@ -129,7 +129,10 @@ impl<D: DepOps> DepTreeManager<D> {
         issue_nx: NodeIndex,
         fixes: Vec<(String, Version, Version)>,
         debugger: &mut impl Write,
-    ) -> Result<Vec<(String, Version, Version)>, AuditError> {
+    ) -> Result<Vec<(String, Version, Version, Vec<String>)>, AuditError> {
+        // Updates the candidates first.
+        self.prepare_limited_candidates(issue_nx, debugger)?;
+
         let max_step = fixes.len();
         let mut cur_step = 0;
         let mut do_fix = Vec::new();
@@ -185,10 +188,20 @@ impl<D: DepOps> DepTreeManager<D> {
                 .unwrap();
 
                 let fix = step_fixes.remove(0);
-                do_fix.push(fix.clone());
-
-                let (resolve, tree) = self.depops.update_resolve(&self.depresolve.0, fix)?;
+                let (resolve, tree) = self
+                    .depops
+                    .update_resolve(&self.depresolve.0, fix.clone())?;
                 let used_rufs = self.depops.extract_rufs(&resolve)?;
+
+                let rufs_after_fix =
+                    if let Some(rufs) = used_rufs.get(&format!("{}@{}", fix.0, fix.2)) {
+                        rufs.clone()
+                    } else {
+                        Vec::new()
+                    };
+
+                do_fix.push((fix.0, fix.1, fix.2, rufs_after_fix));
+
                 self.depresolve = Rc::new((resolve, tree, used_rufs));
 
                 cur_step += 1;
@@ -280,6 +293,19 @@ impl<D: DepOps> DepTreeManager<D> {
         let mut fix = FxHashMap::default();
         let limited_candidates_borrow = self.limited_candidates.borrow();
 
+        // println!(
+        //     "[DEBUG] name: {dep_name}, limited_candidates_borrow: {:?}",
+        //     limited_candidates_borrow
+        //         .iter()
+        //         .map(|(name, (_, vers))| format!(
+        //             "{} - {:?}\n",
+        //             name,
+        //             vers.iter()
+        //                 .map(|(v, _)| v.to_string())
+        //                 .collect::<Vec<String>>()
+        //         ))
+        //         .collect::<Vec<String>>()
+        // );
         // 1. Check direct fixable first.
         let (_removable, candidates) = &limited_candidates_borrow.get(&dep_name).unwrap();
 

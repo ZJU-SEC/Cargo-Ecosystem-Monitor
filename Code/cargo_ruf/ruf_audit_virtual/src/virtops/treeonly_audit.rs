@@ -1,17 +1,41 @@
-use std::io::Write;
+use std::{fmt::Debug, io::Write};
 
 use cargo_lock::dependency::graph::NodeIndex;
-use fxhash::{FxHashMap, FxHashSet};
+use fxhash::FxHashMap;
 use petgraph::visit;
 use semver::Version;
 
 use super::ops::DepOpsVirt;
 use crate::core::{AuditError, DepTreeManager};
 
-#[derive(Debug)]
 pub struct Summary {
     pub fix_rustv: i32,
-    pub fix_deps: FxHashMap<String, Vec<(String, Version, Version)>>,
+    pub fix_deps: FxHashMap<String, Vec<(String, Version, Version, Vec<String>)>>,
+}
+
+impl Debug for Summary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Summary")
+            .field("fix_rustv", &self.fix_rustv)
+            .field(
+                "fix_deps",
+                &self
+                    .fix_deps
+                    .iter()
+                    .map(|(name_ver, deps)| {
+                        (
+                            name_ver,
+                            deps.iter()
+                                .map(|(name, ver, fix_ver, feats)| {
+                                    (name, ver.to_string(), fix_ver.to_string(), feats)
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<FxHashMap<_, _>>(),
+            )
+            .finish()
+    }
 }
 
 /// The main audit function.
@@ -194,9 +218,8 @@ fn try_fix(
     first_issue: NodeIndex,
     first_fix: Vec<(String, Version, Version)>,
     debugger: &mut impl Write,
-) -> Result<FxHashMap<String, Vec<(String, Version, Version)>>, AuditError> {
+) -> Result<FxHashMap<String, Vec<(String, Version, Version, Vec<String>)>>, AuditError> {
     // For loop detect.
-    let mut already_fixed = FxHashSet::default();
     let mut is_first = Some((first_issue, first_fix));
     let mut fix_deps = FxHashMap::default();
 
@@ -215,8 +238,18 @@ fn try_fix(
 
             let issue_nx = issue_nx.unwrap();
 
-            let fix = deptree.issue_fixable(issue_nx, debugger)?;
-            assert!(!fix.is_empty(), "Fatal, no fix found when fixing issue.");
+            let fix = match deptree.issue_fixable(issue_nx, debugger) {
+                Ok(fix) => fix,
+                Err(e) => {
+                    writeln!(
+                        debugger,
+                        "[VirtAudit Debug] check_fixable: Issue dep {}@{} is not fixable with error {:?}.",
+                        graph[issue_nx].name, graph[issue_nx].version, e
+                    )
+                    .unwrap();
+                    return Err(e);
+                }
+            };
 
             let fix = fix
                 .into_iter()
@@ -251,15 +284,6 @@ fn try_fix(
         let steps = deptree.issue_dofix(issue_nx, fix, debugger)?;
 
         entry.extend(steps.into_iter());
-
-        let check_loop = already_fixed.insert(issue_name_ver);
-
-        if !check_loop {
-            return Err(AuditError::FunctionError(
-                Some(format!("Dupfix, maybe a loop happens",)),
-                Some(issue_nx),
-            ));
-        }
     }
 }
 
@@ -271,24 +295,8 @@ fn test_audit() {
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let mut buffer = stdout.lock().unwrap();
 
-    // let res = audit("taxonomy", "0.3.1", WORKSPACE_PATH, &mut *buffer);
-    // let res = audit("pyo3", "0.9.2", WORKSPACE_PATH, &mut *buffer);
-
-    // let res = audit(
-    //     "rustc-ap-rustc_errors",
-    //     "12.0.0",
-    //     WORKSPACE_PATH,
-    //     &mut *buffer,
-    // );
-
-    // let res = audit("tar", "0.4.0", WORKSPACE_PATH, &mut *buffer);
-    // let res = audit("chrono-tz", "0.1.0", WORKSPACE_PATH, &mut *buffer);
     let res = treeonly_audit("leaf", "0.0.1", WORKSPACE_PATH, &mut *buffer);
-
-    // let res = audit("kunai", "0.3.0", WORKSPACE_PATH, &mut *buffer);
-    // let res = audit("hsr-codegen", "0.2.0", WORKSPACE_PATH, &mut *buffer);
-    // let res = audit("bouncer", "1.0.0", WORKSPACE_PATH, &mut *buffer);
-    // let res = audit("tari_comms_dht", "0.8.1", WORKSPACE_PATH, &mut *buffer);
+    // let res = treeonly_audit("ccm", "0.4.3", WORKSPACE_PATH, &mut *buffer);
 
     println!("RESULTS: {:?}", res);
 }

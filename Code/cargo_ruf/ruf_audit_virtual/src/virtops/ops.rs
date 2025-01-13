@@ -211,7 +211,7 @@ impl DepOpsVirt {
                 if let Some(dup) = check_dup {
                     if dup != req {
                         return Err(format!(
-                            "conflict version reqs on {dup}, maybe differernt cfgs"
+                            "conflict version reqs on {name}: {dup}, by {version_id}, maybe differernt cfgs"
                         ));
                     }
                 }
