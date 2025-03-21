@@ -7,13 +7,3 @@ To use these scripts, you should not directly run each script. In each sql file,
 Be aware that some scripts depend on prebuild tables, you should build them in `prebuild.sql` file.
 
 Lastly, make sure you read and understand the documentation to avoid corrupting your data.
-
-### RUF Usage Analysis
-
-We further analyze RUF usage in different dimensions.
-```Shell
-# Analyze
-python3 ruf_usage_analysis.py ruf_usage_lifetime
-# Result summary
-python3 ruf_usage_analysis.py results
-```

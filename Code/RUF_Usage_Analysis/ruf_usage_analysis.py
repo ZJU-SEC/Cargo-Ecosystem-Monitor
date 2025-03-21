@@ -586,6 +586,7 @@ def process_results(dump_file):
         another_record = [type, inspect_window_time, duration_yes, last_usage]
         processed_records.append(another_record)
         # print(f"{inspect_window_time}, {duration_yes}, {type}")
+    open('processed_records.json', 'w').write(json.dumps(processed_records, indent=4))
     make_graph(processed_records)
 
 
@@ -603,11 +604,11 @@ def make_graph(records):
     pal = {'Unstable':"#6495ED", 'Removed':"#F08080", 'Stable':'#80d819'}
 
     # Figure 1: Window <-> Last Usage
-    # plt.figure().clear()
-    # g = sns.lmplot(x="inspect_window_time", y="last_usage", col="ruf_type", hue="ruf_type", data=df,
-    #             palette=pal, y_jitter=.02, logistic=True , truncate=False)
-    # g.set(xlim=(0, 3000), ylim=(-.05, 1.05))
-    # matplotlib.pyplot.savefig('figure1.pdf', dpi=400, format='pdf')
+    plt.figure().clear()
+    g = sns.lmplot(x="inspect_window_time", y="last_usage", col="ruf_type", hue="ruf_type", data=df,
+                palette=pal, y_jitter=.02, logistic=True , truncate=False)
+    g.set(xlim=(0, 3000), ylim=(-.05, 1.05))
+    matplotlib.pyplot.savefig('figure1.pdf', dpi=400, format='pdf')
 
     # # Figure 2: Window <-> Duration Yes
     # plt.figure().clear()
@@ -695,30 +696,31 @@ def make_graph(records):
 
     # Box Plot
     # Draw a nested boxplot to show bills by day and time
-    plt.figure().clear()
-    column = ['ruf_type',  'inspect_window_time', 'duration_yes', 'last_usage']
-    average_dots = list()
-    for record in records:
-        ruf_type = record[0]
-        inspect_window_time = int(record[1]/84)
-        duration_yes = record[2]
-        last_usage = record[3]
-        if ruf_type != 'Stable':
-            continue
-        if last_usage == 0:
-            average_dots.append([ruf_type, inspect_window_time, duration_yes, last_usage])
-    df = pd.DataFrame(data = average_dots, columns=column)
-    sns.boxplot(x="inspect_window_time", y="duration_yes",
-                color="#6495ED", flierprops={'markerfacecolor': '#00000000', 'markeredgecolor': '#00000000'},boxprops=dict(edgecolor='#6495ED'),
-                data=df)
-    matplotlib.pyplot.savefig('Box.png', dpi=400, format='png')
-    sns.despine(offset=10, trim=True)
+    # plt.figure().clear()
+    # column = ['ruf_type',  'inspect_window_time', 'duration_yes', 'last_usage']
+    # average_dots = list()
+    # for record in records:
+    #     ruf_type = record[0]
+    #     inspect_window_time = int(record[1]/84)
+    #     duration_yes = record[2]
+    #     last_usage = record[3]
+    #     if ruf_type != 'Stable':
+    #         continue
+    #     if last_usage == 0:
+    #         average_dots.append([ruf_type, inspect_window_time, duration_yes, last_usage])
+    # df = pd.DataFrame(data = average_dots, columns=column)
+    # sns.boxplot(x="inspect_window_time", y="duration_yes",
+    #             color="#6495ED", flierprops={'markerfacecolor': '#00000000', 'markeredgecolor': '#00000000'},boxprops=dict(edgecolor='#6495ED'),
+    #             data=df)
+    # matplotlib.pyplot.savefig('Box.png', dpi=400, format='png')
+    # sns.despine(offset=10, trim=True)
 
 
     # Final figure
     plt.figure().clear()
     ruf_types = ['Stable', 'Unstable', 'Removed']
-    figure, axes = plt.subplots(nrows=2, ncols=3, figsize=(12, 10), height_ratios=[1, 1.8], sharey='row', sharex='col')
+    # figure, axes = plt.subplots(nrows=2, ncols=3, figsize=(12, 10), height_ratios=[1, 2.2], sharey='row', sharex='col')
+    figure, axes = plt.subplots(nrows=2, ncols=3, figsize=(10, 6), height_ratios=[1, 2.2], sharey='row', sharex='col')
     for idx in range(len(ruf_types)):
         ruf_type = ruf_types[idx]
         color = pal[ruf_type]
@@ -746,15 +748,22 @@ def make_graph(records):
             scatter_kws={"s": 35}, line_kws={"linewidth": 3}, ax = axes[1, idx]
         )
         g.set(xlim=(0, 2800), ylim=(0, 1000))
+    # axes[0][0].set_title('稳定的 RUF')
+    # axes[0][1].set_title('不稳定的 RUF')
+    # axes[0][2].set_title('移除的 RUF')
     for ax, title in zip(axes[0], ruf_types):
         ax.set_title(title + ' RUF')
-        ax.set(xlabel='', ylabel='')
+        ax.set(xlabel='Fix Window / days', ylabel='')
     for ax, title in zip(axes[1], ruf_types):
         ax.set(xlabel='Fix Window / days', ylabel='')
+        # ax.set(xlabel='修复窗口（天）', ylabel='')
     axes[0, 0].set(ylabel='Final Usage')
+    # axes[0, 0].set(ylabel='最终RUF使用情况')
     axes[1, 0].set(ylabel='Fix Time / days')
-    # plt.tight_layout()
+    # axes[1, 0].set(ylabel='主动修复RUF使用时间（天）')
     plt.subplots_adjust(wspace=0.07, hspace=0.07)
+    # plt.rcParams['font.sans-serif']=['SimHei'] # Show Chinese label
+    plt.tight_layout()
     matplotlib.pyplot.savefig('ruf_repair_yes.png', dpi=400, format='png')
     matplotlib.pyplot.savefig('ruf_repair_yes.pdf', dpi=400, format='pdf')
 
