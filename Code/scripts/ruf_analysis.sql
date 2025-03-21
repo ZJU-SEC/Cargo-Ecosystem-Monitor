@@ -119,7 +119,12 @@ WITH hot_feat AS(
 ) SELECT feature, count, status FROM hot_feat INNER JOIN feature_status ON feature = name
 WHERE feature IN (SELECT * FROM feature_abnormal)
 ORDER BY count DESC;
-
+-- Abnormal Hot RUF by ruf impacts
+SELECT ruf, COUNT(DISTINCT ver) FROM tmp_ruf_impact
+WHERE ruf IN (SELECT * FROM feature_abnormal)
+GROUP BY ruf ORDER BY count DESC LIMIT 100;
+SELECT COUNT(DISTINCT ver) FROM tmp_ruf_impact
+WHERE ruf IN (SELECT * FROM feature_abnormal) LIMIT 100;
 
 
 -- 5. Hot version(RUF) with most dependents
@@ -214,3 +219,14 @@ SELECT count(*)  FROM version_feature_ori WHERE feature NOT IN (SELECT name FROM
 SELECT count(*)  FROM version_feature_ori WHERE feature = 'libc' OR feature = 'rust_2018_preview' OR feature = 'const_slice_from_raw_parts_mut' OR feature = 'strict_provenance_atomic_ptr';
 
 -- 10. Super-spreader "redox_syscall-1.0.57" RUF Impact Mitigation
+
+
+-- 11. RUF usage and impacts of Popular crate (latest version of crates with most downloads)
+WITH popular_crate AS (
+    SELECT crates.id, crates.name, crates.downloads
+    FROM crates INNER JOIN crate_newestversion
+    ON id = crate_id WHERE yanked = false
+)
+SELECT version_feature_ori.id, name, downloads, count(*)
+FROM popular_crate INNER JOIN version_feature_ori ON popular_crate.id=version_feature_ori.id 
+WHERE feature IS NOT NULL GROUP BY version_feature_ori.id,name,downloads ORDER BY downloads DESC LIMIT 100;
