@@ -2,7 +2,7 @@
 
 Rust ecosystem analysis, mainly the Cargo ecosystem.
 
-Our first target issue is the **Rust unstable feature (RUF)**, published in [ICSE'24](https://dl.acm.org/doi/10.1145/3597503.3623352). See  [released full paper here](./RustUnstableFeature_ICSE24.pdf).
+Our first target issue is the **Rust unstable feature (RUF)**, published in [ICSE'24](https://dl.acm.org/doi/10.1145/3597503.3623352). See [released full paper here](./RustUnstableFeature_ICSE24.pdf). Full extended paper is published in TSE'25, where we explore more on RUF. We recommend you see [full TSE version here](./RustUnstableFeature_TSE25.pdf).
 
 **WIP**: Though our repo follows a decoupled design, the code directory becomes more and more complex thus making reuse a big problem. We are now trying to separate each project into a separate repo for simplicity. See https://github.com/Cargo-Ecosystem-Monitor for the latest updates.
 
