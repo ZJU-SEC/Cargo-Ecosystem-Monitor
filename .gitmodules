@@ -1,10 +1,24 @@
 [submodule "crates.io-index"]
 	path = crates.io-index
 	url = https://github.com/rust-lang/crates.io-index
-
 [submodule "rust"]
 	path = rust
 	url = https://github.com/Yinwhe/rust
 [submodule "Code/cargo_ruf/ruf_audit"]
 	path = Code/cargo_ruf/ruf_audit
 	url = https://github.com/Yinwhe/ruf-audit.git
+[submodule "Code/rust_deps"]
+	path = Code/rust_deps
+	url = https://github.com/Rust-Hell/Rust-Dependency-Resolver.git
+[submodule "Code/crate_downloader"]
+	path = Code/crate_downloader
+	url = https://github.com/Rust-Hell/Cargo-Crate-Downloader.git
+[submodule "Code/ruf_usage_extractor"]
+	path = Code/ruf_usage_extractor
+	url = https://github.com/Rust-Hell/RUF-Usage-Extractor.git
+[submodule "Code/rustdoc_parser"]
+	path = Code/rustdoc_parser
+	url = https://github.com/Rust-Hell/Rustdoc-Parser.git
+[submodule "Code/nightly_propagation/test_feature"]
+	path = Code/nightly_propagation/test_feature
+	url = https://github.com/Rust-Hell/RUF-Lifetime.git
