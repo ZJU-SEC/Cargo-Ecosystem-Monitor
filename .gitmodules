@@ -22,3 +22,6 @@
 [submodule "Code/nightly_propagation/test_feature"]
 	path = Code/nightly_propagation/test_feature
 	url = https://github.com/Rust-Hell/RUF-Lifetime.git
+[submodule "Code/Code/nightly_propagation/test_feature"]
+	path = Code/Code/nightly_propagation/test_feature
+	url = https://github.com/Rust-Hell/RUF-Lifetime.git
