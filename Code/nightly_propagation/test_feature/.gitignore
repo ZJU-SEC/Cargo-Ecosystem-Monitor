@@ -1,8 +1,0 @@
-target
-do_test
-do_test.rs
-Cargo.lock
-on_process
-__pycache__
-feature_lifetime.log
-*.pdf
