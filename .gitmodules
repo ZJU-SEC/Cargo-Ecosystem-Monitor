@@ -25,3 +25,6 @@
 [submodule "Code/Code/nightly_propagation/test_feature"]
 	path = Code/Code/nightly_propagation/test_feature
 	url = https://github.com/Rust-Hell/RUF-Lifetime.git
+[submodule "rust_deps"]
+	path = rust_deps
+	url = https://github.com/Rust-Hell/Rust-Dependency-Resolver.git
